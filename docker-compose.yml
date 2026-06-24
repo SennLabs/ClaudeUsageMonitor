@@ -2,7 +2,7 @@ services:
   ingest:
     build: ./ingest
     ports:
-      - "8000:8000"
+      - "9585:8000"
     environment:
       - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
     volumes:
@@ -12,7 +12,7 @@ services:
   dashboard:
     build: ./dashboard
     ports:
-      - "8080:80"
+      - "9595:80"
     environment:
       - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
     depends_on:

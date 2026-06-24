@@ -34,7 +34,7 @@ cd ingest
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt   # includes httpx, needed for test_ingest.py
 .venv/bin/python test_ingest.py                 # optional: run the smoke test
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 9585
 
 # dashboard (separate terminal)
 cd dashboard
@@ -49,8 +49,8 @@ cp .env.example .env   # set INGEST_AUTH_TOKEN to enable auth (recommended - see
 docker compose up --build
 ```
 
-- Dashboard: `http://localhost:8080`
-- Ingest (for dev containers to report to): `http://<this-host>:8000`
+- Dashboard: `http://localhost:9595`
+- Ingest (for dev containers to report to): `http://<this-host>:9585`
 
 Usage data persists in the `usage-data` named volume across container recreation.
 
@@ -65,7 +65,7 @@ built-in OpenTelemetry export and pointing it here. Add this to `.claude/setting
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://<host-running-ingest>:8000",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://<host-running-ingest>:9585",
     "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer <INGEST_AUTH_TOKEN value>",
     "OTEL_LOGS_EXPORT_INTERVAL": "5000"
   }
