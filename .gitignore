@@ -1,0 +1,22 @@
+# Secrets - .env holds INGEST_AUTH_TOKEN, never commit it (.env.example is fine)
+.env
+
+# Python (ingest/)
+.venv/
+__pycache__/
+*.pyc
+
+# SQLite data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Node (dashboard/ has its own .gitignore for build-time specifics;
+# these are here as a backstop)
+node_modules/
+dist/
+
+# OS / editor cruft
+.DS_Store
+*.swp

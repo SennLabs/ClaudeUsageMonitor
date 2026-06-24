@@ -1,0 +1,9 @@
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+usage.db
+*.db
+.git
+test_ingest.py
+requirements-dev.txt

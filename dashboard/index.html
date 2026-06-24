@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Usage Monitor</title>
+    <script>
+      // Runs before paint so there's no flash of the wrong theme.
+      // Defaults to dark unless the user has explicitly chosen light before.
+      if (localStorage.getItem('theme') !== 'light') {
+        document.documentElement.classList.add('dark')
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>

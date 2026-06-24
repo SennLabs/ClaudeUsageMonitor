@@ -1,0 +1,23 @@
+services:
+  ingest:
+    build: ./ingest
+    ports:
+      - "8000:8000"
+    environment:
+      - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
+    volumes:
+      - usage-data:/data
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "8080:80"
+    environment:
+      - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
+    depends_on:
+      - ingest
+    restart: unless-stopped
+
+volumes:
+  usage-data:

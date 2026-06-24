@@ -1,0 +1,20 @@
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Proxies to the ingest service over the compose network. The browser
+    # never sees INGEST_AUTH_TOKEN - nginx attaches it server-side, so the
+    # token never ships in the frontend bundle.
+    location /api/ {
+        proxy_pass http://ingest:8000/api/;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${INGEST_AUTH_TOKEN}";
+    }
+
+    # SPA fallback - unknown paths resolve to index.html for client-side routing.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

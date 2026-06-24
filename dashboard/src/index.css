@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* Tailwind v4 defaults `dark:` to a media query; switch it to a class on
+   <html> so the toggle in ThemeToggle.tsx can control it explicitly. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+body {
+  @apply bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+}
