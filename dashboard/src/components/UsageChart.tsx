@@ -43,7 +43,7 @@ function tooltipLabel(iso: string, hours: number) {
   return hours <= 48 ? fmtDateTime(iso) : fmtDay(iso)
 }
 function fmtY(v: number, metric: Metric) {
-  if (metric === 'cost') return `$${v.toFixed(4)}`
+  if (metric === 'cost') return `$${v.toFixed(2)}`
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
   if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`
   return String(v)
@@ -201,7 +201,7 @@ export default function UsageChart(props: UsageChartProps) {
               </Show>
               {tooltipLabel(info().bucket, props.hours ?? 24)} —{' '}
               <span class="font-semibold" style={{ color: info().color }}>
-                {props.metric === 'cost' ? `$${info().value.toFixed(4)}` : info().value.toLocaleString()}
+                {props.metric === 'cost' ? `$${info().value.toFixed(2)}` : info().value.toLocaleString()}
               </span>
             </span>
           )}

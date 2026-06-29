@@ -75,3 +75,26 @@ export async function updateSessionProject(
   })
   if (!res.ok) throw new Error(`PATCH session failed with HTTP ${res.status}`)
 }
+
+export interface BackupStatus {
+  enabled: boolean
+  destination: string | null
+  method: 'rsync-ssh' | 'copy'
+  interval_hours: number
+  keep: number
+  last_backup_at: string | null
+  last_backup_ok: boolean | null
+  last_backup_error: string | null
+  next_backup_at: string | null
+}
+
+export const fetchBackupStatus = () => getJSON<BackupStatus>('/backup/status')
+
+export async function triggerBackup(): Promise<BackupStatus> {
+  const res = await fetch(`${BASE}/backup/trigger`, { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+  }
+  return res.json() as Promise<BackupStatus>
+}

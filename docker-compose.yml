@@ -5,8 +5,23 @@ services:
       - "9585:8000"
     environment:
       - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
+      # ── Backup (all optional) ──────────────────────────────────────────
+      # Local/mounted path:   BACKUP_DESTINATION=/backups
+      # rsync over SSH:       BACKUP_DESTINATION=user@nas:/volume1/claude-backups/
+      - BACKUP_DESTINATION=${BACKUP_DESTINATION:-}
+      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
+      - BACKUP_KEEP=${BACKUP_KEEP:-7}
+      # Path to SSH private key inside the container (mount it via volumes below)
+      - BACKUP_SSH_KEY=${BACKUP_SSH_KEY:-}
     volumes:
       - ./usage-data:/data
+      # Uncomment and adjust if using rsync-over-SSH backup:
+      # - /home/youruser/.ssh/id_ed25519:/run/secrets/backup_key:ro
+      # Then set BACKUP_SSH_KEY=/run/secrets/backup_key
+      #
+      # Uncomment if backing up to a locally mounted NAS path:
+      # - /mnt/nas/claude-backups:/backups
+      # Then set BACKUP_DESTINATION=/backups
     restart: unless-stopped
 
   dashboard:

@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -6,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db
+from . import backup, db
 from .otlp import extract_log_events
 
 AUTH_TOKEN = os.environ.get("INGEST_AUTH_TOKEN")
@@ -15,17 +16,22 @@ AUTH_TOKEN = os.environ.get("INGEST_AUTH_TOKEN")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    task = None
+    if backup.ENABLED:
+        task = asyncio.create_task(backup.start_scheduler(db.DB_PATH))
     yield
+    if task:
+        task.cancel()
 
 
 app = FastAPI(title="Claude Usage Monitor - Ingest", lifespan=lifespan)
 
 # Dashboard is a separate origin (Vite dev server / static host) hitting the
-# read-only /api/* routes - this is an internal tool, so allow any origin.
+# /api/* routes — this is an internal tool, so allow any origin.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "PATCH"],
+    allow_methods=["GET", "PATCH", "POST"],
     allow_headers=["*"],
 )
 
@@ -93,3 +99,19 @@ class SessionUpdate(BaseModel):
 async def patch_session(session_id: str, body: SessionUpdate):
     db.update_session_project(session_id, body.project_name or None)
     return {"ok": True}
+
+
+# ── Backup endpoints ───────────────────────────────────────────────────────
+
+@app.get("/api/backup/status", dependencies=[Depends(require_auth)])
+async def get_backup_status():
+    return backup.status()
+
+
+@app.post("/api/backup/trigger", dependencies=[Depends(require_auth)])
+async def trigger_backup():
+    if not backup.DESTINATION:
+        raise HTTPException(status_code=400, detail="BACKUP_DESTINATION is not configured")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, lambda: backup.run_backup(db.DB_PATH))
+    return backup.status()

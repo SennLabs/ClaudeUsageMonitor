@@ -1,5 +1,6 @@
 import { createResource, createSignal, For, onMount, Show } from 'solid-js'
-import { fetchUsageByModel } from '../api'
+import { fetchBackupStatus, fetchUsageByModel, triggerBackup } from '../api'
+import type { BackupStatus } from '../api'
 import {
   type AppSettings,
   type Metric,
@@ -66,7 +67,23 @@ const inputClass =
 
 export default function SettingsPage() {
   const [usageByModel] = createResource(fetchUsageByModel)
+  const [backupStatus, { refetch: refetchBackup }] = createResource(fetchBackupStatus)
+  const [triggerError, setTriggerError] = createSignal<string | null>(null)
+  const [triggering, setTriggering] = createSignal(false)
   const [saved, setSaved] = createSignal(false)
+
+  async function handleTriggerBackup() {
+    setTriggering(true)
+    setTriggerError(null)
+    try {
+      await triggerBackup()
+      await refetchBackup()
+    } catch (e) {
+      setTriggerError((e as Error).message)
+    } finally {
+      setTriggering(false)
+    }
+  }
 
   // ── form state ─────────────────────────────────────────────────────────
   const [monthlyBudget, setMonthlyBudget] = createSignal('')
@@ -371,6 +388,14 @@ export default function SettingsPage() {
           </p>
         </Section>
 
+        {/* ── Backup ─────────────────────────────────────────── */}
+        <BackupSection
+          status={backupStatus()}
+          triggering={triggering()}
+          triggerError={triggerError()}
+          onTrigger={handleTriggerBackup}
+        />
+
         {/* ── Other ideas ────────────────────────────────────── */}
         <Section title="Other settings to consider adding">
           <ul class="space-y-2 text-sm text-slate-500 dark:text-slate-400 list-disc list-inside">
@@ -408,5 +433,118 @@ export default function SettingsPage() {
         </div>
       </main>
     </div>
+  )
+}
+
+function fmtDateTime(iso: string | null) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+}
+
+function BackupSection(props: {
+  status: BackupStatus | undefined
+  triggering: boolean
+  triggerError: string | null
+  onTrigger: () => void
+}) {
+  return (
+    <Section
+      title="Database Backup"
+      description="Periodically copy the SQLite database to a NAS or remote server. Configure via environment variables on the ingest container — see docker-compose.yml for examples."
+    >
+      <Show
+        when={props.status}
+        fallback={<p class="text-sm text-slate-500">Loading backup status…</p>}
+      >
+        {(s) => (
+          <>
+            <Show
+              when={s().enabled}
+              fallback={
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+                  <p class="font-medium text-slate-700 dark:text-slate-300 mb-1">Backup is not configured</p>
+                  <p>
+                    Set <code class="rounded bg-slate-200 px-1 dark:bg-slate-700">BACKUP_DESTINATION</code> on
+                    the ingest container to enable. Use a local path (NAS mount) or an rsync SSH target like{' '}
+                    <code class="rounded bg-slate-200 px-1 dark:bg-slate-700">user@host:/path/to/backups/</code>.
+                  </p>
+                  <p class="mt-2">Optional variables:</p>
+                  <ul class="ml-4 mt-1 list-disc space-y-0.5">
+                    <li><code class="rounded bg-slate-200 px-1 dark:bg-slate-700">BACKUP_INTERVAL_HOURS</code> — how often to run (default: 24)</li>
+                    <li><code class="rounded bg-slate-200 px-1 dark:bg-slate-700">BACKUP_KEEP</code> — how many copies to keep locally (default: 7)</li>
+                    <li><code class="rounded bg-slate-200 px-1 dark:bg-slate-700">BACKUP_SSH_KEY</code> — path to SSH private key for rsync</li>
+                  </ul>
+                </div>
+              }
+            >
+              <div class="space-y-3">
+                {/* Status grid */}
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                  <StatusRow label="Destination" value={s().destination ?? '—'} mono />
+                  <StatusRow
+                    label="Method"
+                    value={s().method === 'rsync-ssh' ? 'rsync over SSH' : 'local copy'}
+                  />
+                  <StatusRow label="Schedule" value={`every ${s().interval_hours}h · keep ${s().keep}`} />
+                  <StatusRow label="Next backup" value={fmtDateTime(s().next_backup_at)} />
+                  <StatusRow label="Last backup" value={fmtDateTime(s().last_backup_at)} />
+                  <StatusRow
+                    label="Last result"
+                    value={
+                      s().last_backup_ok === null
+                        ? 'Never run'
+                        : s().last_backup_ok
+                          ? 'OK ✓'
+                          : 'Failed ✗'
+                    }
+                    accent={
+                      s().last_backup_ok === null
+                        ? undefined
+                        : s().last_backup_ok
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-red-600 dark:text-red-400'
+                    }
+                  />
+                </div>
+
+                <Show when={s().last_backup_error}>
+                  <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-mono text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
+                    {s().last_backup_error}
+                  </div>
+                </Show>
+
+                <div class="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={props.onTrigger}
+                    disabled={props.triggering}
+                    class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 transition"
+                  >
+                    {props.triggering ? 'Running…' : 'Run backup now'}
+                  </button>
+                  <Show when={props.triggerError}>
+                    <span class="text-sm text-red-600 dark:text-red-400">{props.triggerError}</span>
+                  </Show>
+                </div>
+              </div>
+            </Show>
+          </>
+        )}
+      </Show>
+    </Section>
+  )
+}
+
+function StatusRow(props: { label: string; value: string; mono?: boolean; accent?: string }) {
+  return (
+    <>
+      <div class="text-slate-500 dark:text-slate-400">{props.label}</div>
+      <div
+        class={`font-medium ${props.accent ?? 'text-slate-800 dark:text-slate-200'} ${props.mono ? 'font-mono text-xs break-all' : ''}`}
+      >
+        {props.value}
+      </div>
+    </>
   )
 }

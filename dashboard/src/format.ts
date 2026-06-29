@@ -3,7 +3,7 @@ export function formatNumber(n: number): string {
 }
 
 export function formatCost(n: number): string {
-  return `$${n.toFixed(4)}`
+  return `$${n.toFixed(2)}`
 }
 
 export function formatTime(iso: string): string {

@@ -115,7 +115,7 @@ export default function App() {
       <Show when={alertActive()}>
         <div class="border-b border-amber-200 bg-amber-50 px-6 py-2.5 dark:border-amber-800 dark:bg-amber-950">
           <p class="mx-auto max-w-6xl text-sm font-medium text-amber-800 dark:text-amber-300">
-            ⚠ Hourly spend rate (${costRatePerHour().toFixed(4)}) has exceeded your alert threshold
+            ⚠ Hourly spend rate (${costRatePerHour().toFixed(2)}) has exceeded your alert threshold
             (${settings.costAlertThresholdPerHour!.toFixed(2)}/hr)
           </p>
         </div>
