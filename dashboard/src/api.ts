@@ -12,6 +12,7 @@ export interface SessionRow {
   session_id: string
   user_id: string | null
   organization_id: string | null
+  project_name: string | null
   first_seen_at: string
   last_seen_at: string
   event_count: number
@@ -29,6 +30,21 @@ export interface ModelUsage {
   cost_usd: number
 }
 
+export interface UsageTimePoint {
+  bucket: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+}
+
+export interface ProjectTimePoint {
+  bucket: string
+  project_name: string  // "(untagged)" when no project is set
+  cost_usd: number
+  total_tokens: number
+}
+
 const BASE = '/api'
 
 async function getJSON<T>(path: string): Promise<T> {
@@ -42,3 +58,20 @@ async function getJSON<T>(path: string): Promise<T> {
 export const fetchSummary = () => getJSON<Summary>('/summary')
 export const fetchSessions = () => getJSON<SessionRow[]>('/sessions')
 export const fetchUsageByModel = () => getJSON<ModelUsage[]>('/usage-by-model')
+export const fetchUsageOverTime = (hours = 24) =>
+  getJSON<UsageTimePoint[]>(`/usage-over-time?hours=${hours}`)
+
+export const fetchUsageOverTimeByProject = (hours = 24) =>
+  getJSON<ProjectTimePoint[]>(`/usage-over-time-by-project?hours=${hours}`)
+
+export async function updateSessionProject(
+  sessionId: string,
+  projectName: string | null,
+): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_name: projectName }),
+  })
+  if (!res.ok) throw new Error(`PATCH session failed with HTTP ${res.status}`)
+}

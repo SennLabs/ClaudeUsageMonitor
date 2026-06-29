@@ -30,6 +30,11 @@ def _connect():
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA_PATH.read_text())
+        # Migrate existing databases that predate schema additions
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN project_name TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def upsert_session(
@@ -49,6 +54,14 @@ def upsert_session(
                 organization_id = COALESCE(sessions.organization_id, excluded.organization_id)
             """,
             (session_id, user_id, organization_id, occurred_at, occurred_at),
+        )
+
+
+def update_session_project(session_id: str, project_name: str | None) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE sessions SET project_name = ? WHERE session_id = ?",
+            (project_name, session_id),
         )
 
 
@@ -106,6 +119,7 @@ def fetch_sessions(limit: int = 100) -> list[dict]:
                 s.session_id,
                 s.user_id,
                 s.organization_id,
+                s.project_name,
                 s.first_seen_at,
                 s.last_seen_at,
                 COUNT(e.id)                     AS event_count,
@@ -138,5 +152,56 @@ def fetch_usage_by_model() -> list[dict]:
             GROUP BY model
             ORDER BY cost_usd DESC
             """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def _time_bucket_fmt(hours: int) -> str:
+    """Use hourly buckets for short windows, daily for anything over 2 days."""
+    return '%Y-%m-%dT%H:00:00Z' if hours <= 48 else '%Y-%m-%dT00:00:00Z'
+
+
+def fetch_usage_over_time(hours: int = 24) -> list[dict]:
+    """Return cost and token totals bucketed by hour or day depending on the window."""
+    fmt = _time_bucket_fmt(hours)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                strftime('{fmt}', occurred_at)                            AS bucket,
+                COALESCE(SUM(cost_usd), 0)                               AS cost_usd,
+                COALESCE(SUM(input_tokens), 0)                           AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)                          AS output_tokens,
+                COALESCE(SUM(COALESCE(input_tokens,0)
+                            + COALESCE(output_tokens,0)), 0)              AS total_tokens
+            FROM usage_events
+            WHERE occurred_at >= datetime('now', ?)
+            GROUP BY bucket
+            ORDER BY bucket
+            """,
+            (f"-{hours} hours",),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def fetch_usage_over_time_by_project(hours: int = 24) -> list[dict]:
+    """Return cost/token totals grouped by project_name, bucketed by hour or day."""
+    fmt = _time_bucket_fmt(hours)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                strftime('{fmt}', e.occurred_at)                         AS bucket,
+                COALESCE(s.project_name, '(untagged)')                   AS project_name,
+                COALESCE(SUM(e.cost_usd), 0)                             AS cost_usd,
+                COALESCE(SUM(COALESCE(e.input_tokens,0)
+                            + COALESCE(e.output_tokens,0)), 0)            AS total_tokens
+            FROM usage_events e
+            LEFT JOIN sessions s ON e.session_id = s.session_id
+            WHERE e.occurred_at >= datetime('now', ?)
+            GROUP BY bucket, COALESCE(s.project_name, '(untagged)')
+            ORDER BY bucket, project_name
+            """,
+            (f"-{hours} hours",),
         ).fetchall()
         return [dict(row) for row in rows]

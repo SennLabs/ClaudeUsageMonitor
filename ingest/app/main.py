@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from . import db
 from .otlp import extract_log_events
@@ -24,7 +25,7 @@ app = FastAPI(title="Claude Usage Monitor - Ingest", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "PATCH"],
     allow_headers=["*"],
 )
 
@@ -72,3 +73,23 @@ async def get_sessions():
 @app.get("/api/usage-by-model", dependencies=[Depends(require_auth)])
 async def get_usage_by_model():
     return db.fetch_usage_by_model()
+
+
+@app.get("/api/usage-over-time", dependencies=[Depends(require_auth)])
+async def get_usage_over_time(hours: int = 24):
+    return db.fetch_usage_over_time(hours=min(hours, 720))  # cap at 30 days
+
+
+@app.get("/api/usage-over-time-by-project", dependencies=[Depends(require_auth)])
+async def get_usage_over_time_by_project(hours: int = 24):
+    return db.fetch_usage_over_time_by_project(hours=min(hours, 720))
+
+
+class SessionUpdate(BaseModel):
+    project_name: str | None = None
+
+
+@app.patch("/api/sessions/{session_id}", dependencies=[Depends(require_auth)])
+async def patch_session(session_id: str, body: SessionUpdate):
+    db.update_session_project(session_id, body.project_name or None)
+    return {"ok": True}

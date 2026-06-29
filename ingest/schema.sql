@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     organization_id  TEXT,
     first_seen_at    TEXT,
     last_seen_at     TEXT,
-    end_reason       TEXT
+    end_reason       TEXT,
+    project_name     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (

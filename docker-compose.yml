@@ -6,7 +6,7 @@ services:
     environment:
       - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
     volumes:
-      - usage-data:/data
+      - ./usage-data:/data
     restart: unless-stopped
 
   dashboard:
@@ -19,5 +19,5 @@ services:
       - ingest
     restart: unless-stopped
 
-volumes:
-  usage-data:
+#volumes:
+#  usage-data:
