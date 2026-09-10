@@ -5,7 +5,9 @@ OpenTelemetry export; you enable it and point it at this service.
 
 ## Minimum configuration
 
-Add to a Claude Code `settings.json`:
+Add to a Claude Code `settings.json` — or copy
+[`examples/claude-settings.json`](../examples/claude-settings.json) and fill in
+the three placeholders:
 
 ```json
 {
@@ -15,7 +17,8 @@ Add to a Claude Code `settings.json`:
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://<host-running-ingest>:9585",
     "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer <INGEST_AUTH_TOKEN value>",
-    "OTEL_LOGS_EXPORT_INTERVAL": "5000"
+    "OTEL_LOGS_EXPORT_INTERVAL": "5000",
+    "OTEL_RESOURCE_ATTRIBUTES": "project=<project name>"
   }
 }
 ```
@@ -28,6 +31,7 @@ Add to a Claude Code `settings.json`:
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Base URL. The exporter appends `/v1/logs` itself — do **not** include it. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Supplies the bearer token. Omit the whole line if the server has auth disabled. |
 | `OTEL_LOGS_EXPORT_INTERVAL` | Batch flush interval in ms. 5000 keeps the dashboard feeling live; raise it to reduce request volume. |
+| `OTEL_RESOURCE_ATTRIBUTES` | Declares which project this container belongs to. Rides on every event, so usage arrives already labelled. |
 
 ## Where to put the file
 
@@ -76,23 +80,61 @@ container appear as ten rows.
 
 ## Labelling sessions with a project
 
-Claude Code does not report a project name, so sessions arrive untagged. There
-are two ways to fix that, and for dev containers the first is the one you want.
+Claude Code does not report a project name of its own, so you have to say which
+project a container works on. There are three ways, and the first is the one you
+want for a dev container.
 
-**Link the container's user ID once (recommended).** Every session from a given
-container reports the same `user.id`. Open `/users`, click the Project cell next
-to that ID, and give it a name. Every session that container has already opened
-is relabelled, and every future one arrives already tagged — no per-session
-work, ever. Details in the [Dashboard guide](dashboard.md#users--linking-containers-to-projects).
+### 1. Declare it on the container (recommended)
 
-**Tag one session by hand.** On the `/` view's Sessions table, click a session's
-Project cell, type a name, press Enter. That is a
-`PATCH /api/sessions/{session_id}` writing to `sessions.project_name`, and it
-wins over the user link for that one session.
+```json
+"OTEL_RESOURCE_ATTRIBUTES": "project=radiology-pacs"
+```
 
-Either way, the **By project** toggle on the chart and the sessions table then
-groups everything under that label; anything still untagged collects under
-`(untagged)`.
+Claude Code attaches custom resource attributes to every event it exports, so
+this arrives with the usage itself. Nothing to map, nothing to maintain, correct
+on the container's very first event, and it survives container rebuilds.
+
+You can add more keys — they are all stored with the event and are available for
+later reporting:
+
+```json
+"OTEL_RESOURCE_ATTRIBUTES": "project=radiology-pacs,team.id=platform,cost_center=eng-123"
+```
+
+The format is strict and fails quietly if you get it wrong: comma-separated
+`key=value`, **no spaces anywhere**, US-ASCII only, percent-encode anything else
+(`My Team` → `My%20Team`).
+
+### 2. Link a user ID (fallback)
+
+For containers you cannot reconfigure, and for fixing historical data. On
+`/users`, click the Project cell next to a `user.id` and name it; every session
+that ID owns, past and future, is tagged.
+
+**Know the limitation before relying on this.** Claude Code generates `user.id`
+per *installation* and stores it in `~/.claude.json`. If the container's home
+directory does not persist across rebuilds — the usual case for a dev container
+— every rebuild produces a new ID, the mapping is orphaned, and the rebuilt
+container arrives untagged with nothing in the UI to indicate why.
+
+### 3. Tag one session by hand
+
+On the `/` view's Sessions table, click a session's Project cell, type a name,
+press Enter. That is a `PATCH /api/sessions/{session_id}`.
+
+### Precedence
+
+Recorded per session in `sessions.project_source`, so it is inspectable rather
+than implied:
+
+| Source | Wins over | Behaviour |
+| --- | --- | --- |
+| `manual` | everything | Never overridden by later events |
+| `resource` | `user_map` | Re-applied on every event, so fixing a container's config fixes its in-flight sessions too |
+| `user_map` | nothing | Only ever fills a gap |
+
+Whichever you use, the **By project** toggle on the chart and the sessions table
+groups by that label; anything still untagged collects under `(untagged)`.
 
 ## Sessions that start but are never used
 

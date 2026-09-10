@@ -118,14 +118,26 @@ map in `usage_events.raw_attributes` as JSON. When Claude Code adds or renames a
 telemetry attribute, the data is already captured — only the parser's alias map
 and a query need updating, with no backfill lost.
 
-**Projects are a server-side label, not a client one.** Claude Code does not
-report a project name, so the label lives on the `sessions` row. It gets there
-two ways: `PATCH /api/sessions/{id}` for one session, or a standing
-`user.id` → project mapping in `user_projects` that applies to every session a
-dev container opens, past and future. The per-session label wins — `upsert_session`
-only ever fills a *null* `project_name`, so a hand-set label survives later
-events. Everything grouped "by project" joins through that one column, and
-untagged sessions collapse into a `(untagged)` bucket rather than disappearing.
+**Projects are declared by the container, with server-side fallbacks.** Claude
+Code reports no project name of its own, but it does attach arbitrary custom
+resource attributes to every event, so a container can declare
+`OTEL_RESOURCE_ATTRIBUTES=project=<name>` and have its usage arrive already
+labelled.
+
+That is the primary mechanism because it is the only one keyed on something
+durable. The original design mapped `user.id` → project in a `user_projects`
+table, but Claude Code generates `user.id` per *installation*; when a dev
+container's home directory does not persist, every rebuild produces a new
+identity and orphans the mapping. The project is a property of the container,
+so the container is what should declare it.
+
+Three sources remain, and `sessions.project_source` records which applied:
+`manual` (a `PATCH` on one session) beats `resource` (the container's own
+attribute) beats `user_map` (the fallback table). `resource` is re-applied on
+every event, so correcting a container's config corrects its in-flight sessions;
+`user_map` only ever fills a gap. Everything grouped "by project" joins through
+the one `project_name` column, and untagged sessions collapse into `(untagged)`
+rather than disappearing.
 
 **Empty sessions are deleted, not hidden.** Starting Claude Code in a container
 emits telemetry even if nobody uses it. Filtering those out at read time would

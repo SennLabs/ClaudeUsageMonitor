@@ -93,14 +93,36 @@ export default function UsersPage() {
       </header>
 
       <main class="mx-auto max-w-6xl space-y-6 px-6 py-8">
+        <div class="rounded-xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950">
+          <h2 class="text-base font-semibold text-amber-900 dark:text-amber-200">
+            Prefer declaring the project on the container
+          </h2>
+          <p class="mt-1.5 max-w-3xl text-sm text-amber-800 dark:text-amber-300">
+            Claude Code generates <code class="font-mono text-xs">user.id</code> per{' '}
+            <em>installation</em> and stores it in{' '}
+            <code class="font-mono text-xs">~/.claude.json</code>. If a dev container's home
+            directory does not persist across rebuilds — the usual case — every rebuild produces a
+            new ID and silently orphans the mapping below.
+          </p>
+          <p class="mt-2 max-w-3xl text-sm text-amber-800 dark:text-amber-300">
+            Add this to the container's Claude Code settings instead. It survives rebuilds, needs
+            no mapping, and is correct on the container's very first event:
+          </p>
+          <pre class="mt-2 overflow-x-auto rounded-lg bg-amber-100 p-3 text-xs text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">{'"OTEL_RESOURCE_ATTRIBUTES": "project=my-project"'}</pre>
+          <p class="mt-2 text-sm text-amber-800 dark:text-amber-300">
+            Sessions labelled that way show <strong>resource</strong> as their source and are not
+            affected by anything on this page.
+          </p>
+        </div>
+
         <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <h2 class="text-base font-semibold text-slate-900 dark:text-slate-50">
-            Link a user ID to a project
+            Fallback: link a user ID to a project
           </h2>
           <p class="mt-1.5 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-            Each dev container reports a stable <code class="font-mono text-xs">user.id</code>. Link
-            it once here and every session that container opens — past and future — is tagged with
-            that project, so you never have to label sessions one at a time.
+            For containers you cannot reconfigure, and for fixing historical data. Link a{' '}
+            <code class="font-mono text-xs">user.id</code> once and every session it owns — past
+            and future — is tagged with that project.
           </p>
           <ul class="mt-3 space-y-1 text-sm text-slate-500 dark:text-slate-400">
             <li>• Setting a link relabels that user's existing sessions immediately.</li>
@@ -108,6 +130,9 @@ export default function UsersPage() {
             <li>
               • A project set by hand on an individual session wins — a link never overwrites it
               afterwards.
+            </li>
+            <li>
+              • A project declared by the container also wins, and is left alone by this page.
             </li>
             <li>• Clearing the field removes the link and untags that user's sessions.</li>
           </ul>

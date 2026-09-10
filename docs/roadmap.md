@@ -13,7 +13,7 @@ item — this is a list of options, not a plan of record.
 
 **High value**
 
-- [ ] [R0. Attribute projects with `OTEL_RESOURCE_ATTRIBUTES` instead of mapping user IDs](#r0-attribute-projects-with-otel_resource_attributes-instead-of-mapping-user-ids)
+- [x] [R0. Attribute projects with `OTEL_RESOURCE_ATTRIBUTES` instead of mapping user IDs](#r0-attribute-projects-with-otel_resource_attributes-instead-of-mapping-user-ids) — *done*
 - [ ] [R1. Move settings server-side](#r1-move-settings-server-side)
 - [ ] [R2. Retention and daily rollups](#r2-retention-and-daily-rollups)
 - [ ] [R3. Surface cache efficiency](#r3-surface-cache-efficiency)
@@ -48,7 +48,7 @@ item — this is a list of options, not a plan of record.
 - [ ] [R12. Pin dependencies and base images](#r12-pin-dependencies-and-base-images)
 - [ ] [R13. Turn on TypeScript strict mode, and add frontend tests](#r13-turn-on-typescript-strict-mode-and-add-frontend-tests)
 - [ ] [R14. Adopt pytest, and stop the tests eating the dev database](#r14-adopt-pytest-and-stop-the-tests-eating-the-dev-database)
-- [ ] [R15. Ship an example client configuration](#r15-ship-an-example-client-configuration)
+- [x] [R15. Ship an example client configuration](#r15-ship-an-example-client-configuration) — *done*
 - [ ] [R16. Add a LICENSE](#r16-add-a-license)
 
 ---
@@ -56,6 +56,10 @@ item — this is a list of options, not a plan of record.
 ## High value
 
 ### R0. Attribute projects with `OTEL_RESOURCE_ATTRIBUTES` instead of mapping user IDs
+
+*Status: **done**.*
+
+**Done 2026-09-10.** Parsed in `otlp.py`, applied in `db.write_events` with an explicit precedence recorded in `sessions.project_source`. The `/users` page is demoted to a fallback with a banner. Rolling the setting out to each container is the remaining work — see [R15](#r15-ship-an-example-client-configuration).
 
 **Problem.** The `/users` page maps `user.id` to a project. Claude Code documents
 `user.id` as a *"random anonymous installation ID from `~/.claude.json`"*, and in
@@ -432,6 +436,10 @@ little and makes CI reporting standard. Do it together with
 so the tests stop deleting `ingest/usage.db`.
 
 ### R15. Ship an example client configuration
+
+*Status: **done**.*
+
+**Done 2026-09-10.** [`examples/claude-settings.json`](../examples/claude-settings.json) plus a README covering placement, the `OTEL_RESOURCE_ATTRIBUTES` format rules, and how to check it worked.
 
 Onboarding a new dev container means copying a JSON block out of the README and
 editing three values. An `examples/claude-settings.json` with placeholders, plus

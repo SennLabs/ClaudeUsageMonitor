@@ -53,6 +53,7 @@ def init_db() -> None:
             "ALTER TABLE sessions ADD COLUMN project_name TEXT",
             "ALTER TABLE usage_events ADD COLUMN cost_usd_micros INTEGER",
             "ALTER TABLE usage_events ADD COLUMN event_hash TEXT",
+            "ALTER TABLE sessions ADD COLUMN project_source TEXT",
         ):
             try:
                 conn.execute(stmt)
@@ -65,6 +66,16 @@ def init_db() -> None:
             UPDATE usage_events
                SET cost_usd_micros = CAST(ROUND(cost_usd * 1000000) AS INTEGER)
              WHERE cost_usd_micros IS NULL AND cost_usd IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            UPDATE sessions
+               SET project_source = CASE
+                     WHEN user_id IN (SELECT user_id FROM user_projects) THEN 'user_map'
+                     ELSE 'manual'
+                   END
+             WHERE project_name IS NOT NULL AND project_source IS NULL
             """
         )
         _backfill_event_hashes(conn)
@@ -208,33 +219,74 @@ def write_events(events: list[LogEvent]) -> tuple[int, int]:
                 "last": event.occurred_at,
                 "user_id": event.user_id,
                 "organization_id": event.organization_id,
+                "project": event.project_name,
             }
         else:
             current["first"] = min(current["first"], event.occurred_at)
             current["last"] = max(current["last"], event.occurred_at)
             current["user_id"] = current["user_id"] or event.user_id
             current["organization_id"] = current["organization_id"] or event.organization_id
+            current["project"] = current["project"] or event.project_name
 
     with _connect() as conn:
+        # Resolve any user->project mappings for this batch in one query, so the
+        # per-row SQL stays readable.
+        user_ids = {s["user_id"] for s in sessions.values() if s["user_id"]}
+        mapped: dict[str, str] = {}
+        if user_ids:
+            marks = ",".join("?" * len(user_ids))
+            mapped = {
+                row["user_id"]: row["project_name"]
+                for row in conn.execute(
+                    f"SELECT user_id, project_name FROM user_projects WHERE user_id IN ({marks})",
+                    list(user_ids),
+                )
+            }
+
+        rows = []
+        for sid, s in sessions.items():
+            if s["project"]:
+                project, source = s["project"], "resource"
+            elif s["user_id"] and mapped.get(s["user_id"]):
+                project, source = mapped[s["user_id"]], "user_map"
+            else:
+                project, source = None, None
+            rows.append(
+                (sid, s["user_id"], s["organization_id"], s["first"], s["last"], project, source)
+            )
+
         conn.executemany(
             """
             INSERT INTO sessions (
-                session_id, user_id, organization_id, first_seen_at, last_seen_at, project_name
+                session_id, user_id, organization_id, first_seen_at, last_seen_at,
+                project_name, project_source
             )
-            VALUES (?, ?, ?, ?, ?, (SELECT project_name FROM user_projects WHERE user_id = ?))
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 last_seen_at = MAX(sessions.last_seen_at, excluded.last_seen_at),
                 first_seen_at = MIN(sessions.first_seen_at, excluded.first_seen_at),
                 user_id = COALESCE(sessions.user_id, excluded.user_id),
                 organization_id = COALESCE(sessions.organization_id, excluded.organization_id),
-                -- Picks up a user->project mapping created after the session started,
-                -- without ever overwriting a label set by hand on this session.
-                project_name = COALESCE(sessions.project_name, excluded.project_name)
+
+                -- Project precedence, highest first:
+                --   'manual'   someone tagged this specific session; never overridden
+                --   'resource' the container declared it; authoritative and re-applied
+                --              on every event, so fixing a container's config fixes
+                --              its in-flight sessions too
+                --   'user_map' a user.id mapping; only ever fills a gap
+                project_name = CASE
+                    WHEN sessions.project_source = 'manual' THEN sessions.project_name
+                    WHEN excluded.project_source = 'resource' THEN excluded.project_name
+                    ELSE COALESCE(sessions.project_name, excluded.project_name)
+                END,
+                project_source = CASE
+                    WHEN sessions.project_source = 'manual' THEN 'manual'
+                    WHEN excluded.project_source = 'resource' THEN 'resource'
+                    WHEN sessions.project_name IS NOT NULL THEN sessions.project_source
+                    ELSE excluded.project_source
+                END
             """,
-            [
-                (sid, s["user_id"], s["organization_id"], s["first"], s["last"], s["user_id"])
-                for sid, s in sessions.items()
-            ],
+            rows,
         )
 
         before = conn.total_changes
@@ -272,8 +324,8 @@ def write_events(events: list[LogEvent]) -> tuple[int, int]:
 def update_session_project(session_id: str, project_name: str | None) -> None:
     with _connect() as conn:
         conn.execute(
-            "UPDATE sessions SET project_name = ? WHERE session_id = ?",
-            (project_name, session_id),
+            "UPDATE sessions SET project_name = ?, project_source = ? WHERE session_id = ?",
+            (project_name, "manual" if project_name else None, session_id),
         )
 
 
@@ -334,8 +386,14 @@ def set_user_project(user_id: str, project_name: str) -> int:
             """,
             (user_id, project_name, _now_iso()),
         )
+        # Does not touch sessions whose container declared its own project —
+        # the resource attribute is authoritative and would win back on the
+        # next event anyway.
         cur = conn.execute(
-            "UPDATE sessions SET project_name = ? WHERE user_id = ?",
+            """
+            UPDATE sessions SET project_name = ?, project_source = 'user_map'
+             WHERE user_id = ? AND COALESCE(project_source, '') <> 'resource'
+            """,
             (project_name, user_id),
         )
         return cur.rowcount
@@ -350,7 +408,13 @@ def delete_user_project(user_id: str, clear_sessions: bool = False) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM user_projects WHERE user_id = ?", (user_id,))
         if clear_sessions:
-            conn.execute("UPDATE sessions SET project_name = NULL WHERE user_id = ?", (user_id,))
+            conn.execute(
+                """
+                UPDATE sessions SET project_name = NULL, project_source = NULL
+                 WHERE user_id = ? AND COALESCE(project_source, '') <> 'resource'
+                """,
+                (user_id,),
+            )
 
 
 def fetch_users() -> list[dict]:
@@ -441,6 +505,7 @@ def fetch_sessions(limit: int = 100) -> list[dict]:
                 s.user_id,
                 s.organization_id,
                 s.project_name,
+                s.project_source,
                 s.first_seen_at,
                 s.last_seen_at,
                 COUNT(e.id)                     AS event_count,

@@ -13,6 +13,8 @@ export interface SessionRow {
   user_id: string | null
   organization_id: string | null
   project_name: string | null
+  /** How project_name was set. 'resource' = the container declared it. */
+  project_source: 'resource' | 'user_map' | 'manual' | null
   first_seen_at: string
   last_seen_at: string
   event_count: number

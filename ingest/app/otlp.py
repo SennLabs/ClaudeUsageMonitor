@@ -29,6 +29,13 @@ _ATTR_ALIASES = {
     "cache_creation_input_tokens": "cache_creation_tokens",
     "cost_usd": "cost_usd",
     "cost_usd_micros": "cost_usd_micros",
+    # Set per container via OTEL_RESOURCE_ATTRIBUTES=project=<name>. Claude Code
+    # attaches custom resource attributes to every event, which makes the
+    # container itself declare its project — the durable alternative to mapping
+    # user.id, which is a per-installation ID and changes on every rebuild.
+    "project": "project_name",
+    "project.name": "project_name",
+    "project_name": "project_name",
 }
 
 _INT_FIELDS = {
@@ -39,7 +46,7 @@ _INT_FIELDS = {
     "cost_usd_micros",
 }
 
-_STR_FIELDS = {"session_id", "user_id", "organization_id", "model"}
+_STR_FIELDS = {"session_id", "user_id", "organization_id", "model", "project_name"}
 
 # Anything SQLite can bind directly. A nested kvlistValue/arrayValue decodes to
 # a dict or list, which must not reach the insert — it raises at bind time and
@@ -63,6 +70,8 @@ class LogEvent:
     # Integer millionths, as reported by Claude Code. Exact where cost_usd is a
     # float that accumulates error across SUM() over a growing table.
     cost_usd_micros: int | None = None
+    # From the container's own resource attributes, not from any mapping table.
+    project_name: str | None = None
     raw_attributes: dict[str, Any] = field(default_factory=dict)
 
 

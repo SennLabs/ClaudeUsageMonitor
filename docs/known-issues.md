@@ -31,7 +31,7 @@ single-instance internal tool on a private network.
 - [x] [7. Malformed OTLP payloads return 500 instead of 400](#7-malformed-otlp-payloads-return-500-instead-of-400) — *fixed*
 - [ ] [8. Backups fail silently in several ordinary configurations](#8-backups-fail-silently-in-several-ordinary-configurations) — *verified*
 - [ ] [9. Concurrent backups collide on one temp file](#9-concurrent-backups-collide-on-one-temp-file) — *reported*
-- [ ] [31. User-ID mapping breaks on every dev container rebuild](#31-user-id-mapping-breaks-on-every-dev-container-rebuild) — *verified*
+- [x] [31. User-ID mapping breaks on every dev container rebuild](#31-user-id-mapping-breaks-on-every-dev-container-rebuild) — *fixed*
 
 **P2 — should fix**
 
@@ -69,7 +69,7 @@ single-instance internal tool on a private network.
 - [ ] [D5. Docs describe the dead features as working](#d5-docs-describe-the-dead-features-as-working) — *verified*
 - [x] [D6. Diagnostics in the docs that do not work](#d6-diagnostics-in-the-docs-that-do-not-work) — *fixed*
 - [x] [D7. Smaller doc inaccuracies](#d7-smaller-doc-inaccuracies) — *fixed*
-- [ ] [D8. Client setup recommends the wrong default for dev containers](#d8-client-setup-recommends-the-wrong-default-for-dev-containers) — *verified*
+- [x] [D8. Client setup recommends the wrong default for dev containers](#d8-client-setup-recommends-the-wrong-default-for-dev-containers) — *fixed*
 
 ---
 
@@ -270,7 +270,9 @@ group on `TimeoutExpired`.
 
 ### 31. User-ID mapping breaks on every dev container rebuild
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `OTEL_RESOURCE_ATTRIBUTES=project=<name>` is now parsed from the event's resource attributes and applied directly, so a container declares its own project and attribution survives rebuilds. `sessions.project_source` records which mechanism applied. The `/users` page remains as a fallback and now carries a banner explaining the rebuild caveat. Regression tests `test_project_from_resource_attribute` and `test_project_precedence`.
 
 Claude Code documents `user.id` as a *"random anonymous installation ID from
 `~/.claude.json`"*. The user has confirmed that in this deployment the dev
@@ -722,7 +724,9 @@ decision — do not correct the docs to describe a feature you are about to wire
 
 ### D8. Client setup recommends the wrong default for dev containers
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `client-setup.md` now leads with the resource attribute and documents the precedence table; `dashboard.md` marks `/users` a fallback; `architecture.md`'s design note is rewritten around why the container is the right place to declare the project.
 
 `docs/client-setup.md` presents "link the container's user ID once" as the
 recommended approach for dev containers, and `docs/dashboard.md` describes the

@@ -5,7 +5,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     first_seen_at    TEXT,
     last_seen_at     TEXT,
     end_reason       TEXT,
-    project_name     TEXT
+    project_name     TEXT,
+    -- How project_name was set, so precedence is inspectable rather than
+    -- implied: 'resource' (the container declared it), 'user_map' (a user.id
+    -- mapping filled it in), 'manual' (someone tagged this one session).
+    project_source   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (

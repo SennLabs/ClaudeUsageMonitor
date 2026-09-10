@@ -148,6 +148,7 @@ The 100 most recently active sessions, each with its rolled-up usage.
     "user_id": "user-123",
     "organization_id": "org-456",
     "project_name": "billing-api",
+    "project_source": "resource",
     "first_seen_at": "2026-09-10T01:12:04+00:00",
     "last_seen_at": "2026-09-10T02:48:31+00:00",
     "event_count": 87,
@@ -161,7 +162,9 @@ The 100 most recently active sessions, each with its rolled-up usage.
 
 - Ordered by `last_seen_at` descending, hard-limited to 100.
 - `models` is a comma-joined `GROUP_CONCAT(DISTINCT …)` — a string, not an array.
-- `project_name` is `null` until someone tags the session.
+- `project_name` is `null` until something tags the session; `project_source`
+  says what did (`resource`, `user_map` or `manual`) — see
+  [Client setup](client-setup.md#precedence).
 - A session with no events yet still appears, with zeroed totals.
 
 ---

@@ -240,7 +240,13 @@ export default function SessionsTable(props: {
                         fallback={
                           <button
                             type="button"
-                            title="Click to tag this session"
+                            title={
+                              session.project_source === 'resource'
+                                ? 'Declared by the container via OTEL_RESOURCE_ATTRIBUTES. Tagging here overrides it for this session only.'
+                                : session.project_source === 'user_map'
+                                  ? 'Inherited from this user ID\'s project mapping.'
+                                  : 'Click to tag this session'
+                            }
                             onClick={() => startEdit(session)}
                             class="rounded px-1.5 py-0.5 text-xs font-medium transition hover:bg-slate-100 dark:hover:bg-slate-800"
                             classList={{

@@ -113,9 +113,18 @@ so configure the budget and thresholds *on that device*.
 
 ## `/users` — linking containers to projects
 
-Almost all usage tends to come from dev containers, and each reports a stable
-`user.id`. Tagging sessions one at a time is busywork when the container is
-always the same project — this page links the ID once instead.
+**A fallback, not the primary route.** The recommended way to attribute a
+container's usage is to declare it on the container with
+`OTEL_RESOURCE_ATTRIBUTES` — see
+[Client setup](client-setup.md#1-declare-it-on-the-container-recommended). This
+page exists for containers you cannot reconfigure, and for fixing historical
+data.
+
+The reason it is not the default: Claude Code generates `user.id` per
+*installation*, in `~/.claude.json`. When a dev container's home directory does
+not persist across rebuilds, every rebuild produces a new ID and orphans the
+mapping, with nothing in the UI to indicate it happened. The page shows a banner
+saying so.
 
 The table lists every user ID that has reported, plus any that have a mapping
 but no sessions yet: ID (with organization ID beside it), the linked project,
@@ -132,9 +141,11 @@ Escape cancels. What happens on save:
   further action.
 - Clearing the field removes the link and untags that user's sessions.
 
-A project set by hand on one session still wins day to day: later events from
-that user never overwrite a label that is already there. Re-saving the link on
-this page does relabel everything, since that is an explicit instruction.
+Precedence is recorded per session in `project_source` and shown in the
+Sessions table tooltip: a hand-set label always wins, a container-declared one
+beats a user mapping, and a mapping only ever fills a gap. Re-saving a link here
+relabels that user's sessions **except** those whose container declared its own
+project — a resource attribute would win back on the next event anyway.
 
 Polling pauses while a field is open, so a refresh cannot yank the input out
 from under you mid-edit.

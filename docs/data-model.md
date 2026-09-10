@@ -24,7 +24,8 @@ One row per Claude Code session.
 | `first_seen_at` | TEXT | ISO 8601, from the first event's timestamp |
 | `last_seen_at` | TEXT | ISO 8601, refreshed on every event |
 | `end_reason` | TEXT | Declared but not currently written by any code path |
-| `project_name` | TEXT | Manual label, set via `PATCH /api/sessions/{id}` |
+| `project_name` | TEXT | The project this session belongs to |
+| `project_source` | TEXT | How it was set: `resource`, `user_map` or `manual` — see [Client setup](client-setup.md#precedence) |
 
 Rows are written by `upsert_session`, an `INSERT … ON CONFLICT DO UPDATE` that
 refreshes `last_seen_at` and fills in `user_id` / `organization_id` only if they
@@ -144,6 +145,8 @@ columns via `_ATTR_ALIASES`:
 | `cache_read_tokens`, `cache_read_input_tokens` | `cache_read_tokens` |
 | `cache_creation_tokens`, `cache_creation_input_tokens` | `cache_creation_tokens` |
 | `cost_usd` | `cost_usd` |
+| `cost_usd_micros` | `cost_usd_micros` |
+| `project`, `project.name`, `project_name` | `project_name` (from `OTEL_RESOURCE_ATTRIBUTES`) |
 
 The duplicate entries are version aliases — exporter attribute naming has
 shifted over Claude Code releases, and accepting both spellings means an

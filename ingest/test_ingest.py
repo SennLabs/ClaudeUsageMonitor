@@ -71,6 +71,7 @@ def make_payload(
     cost_usd: float | None = 0.0231,
     age_seconds: float = 0.0,
     event_name: str = "claude_code.api_request",
+    project: str | None = None,
 ) -> dict:
     """Build a minimal OTLP/JSON payload for one log record."""
     attrs = [
@@ -83,10 +84,14 @@ def make_payload(
         attrs.append({"key": "output_tokens", "value": {"intValue": str(output_tokens)}})
     if cost_usd is not None:
         attrs.append({"key": "cost_usd", "value": {"doubleValue": cost_usd}})
+    resource_attrs = [{"key": "user.id", "value": {"stringValue": user_id}}]
+    if project is not None:
+        # What OTEL_RESOURCE_ATTRIBUTES=project=<name> puts on the wire
+        resource_attrs.append({"key": "project", "value": {"stringValue": project}})
     return {
         "resourceLogs": [
             {
-                "resource": {"attributes": [{"key": "user.id", "value": {"stringValue": user_id}}]},
+                "resource": {"attributes": resource_attrs},
                 "scopeLogs": [
                     {
                         "logRecords": [
@@ -439,6 +444,60 @@ def test_oversized_body_rejected() -> None:
     print("OK (body cap) - oversized Content-Length rejected with 413")
 
 
+
+def test_project_from_resource_attribute() -> None:
+    """A container that declares its own project needs no mapping at all."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("rp-1", user_id="ctr-a", project="radiology-pacs"))
+        row = client.get("/api/sessions").json()[0]
+        assert row["project_name"] == "radiology-pacs", row
+        assert row["project_source"] == "resource", row
+
+        # The identity can churn — a rebuilt container reports a new user.id —
+        # and attribution still lands, which is the whole point.
+        client.post("/v1/logs", json=make_payload("rp-2", user_id="ctr-a-rebuilt", project="radiology-pacs"))
+        by_id = {s["session_id"]: s for s in client.get("/api/sessions").json()}
+        assert by_id["rp-2"]["project_name"] == "radiology-pacs", by_id
+
+        # Re-pointing the container relabels its in-flight session
+        client.post("/v1/logs", json=make_payload("rp-1", user_id="ctr-a", project="billing"))
+        by_id = {s["session_id"]: s for s in client.get("/api/sessions").json()}
+        assert by_id["rp-1"]["project_name"] == "billing", by_id
+
+    print("OK (resource project) - container-declared project applied and kept current")
+
+
+def test_project_precedence() -> None:
+    """manual > resource > user_map, and the source is recorded."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        # user_map fills a gap when nothing else says otherwise
+        client.post("/v1/logs", json=make_payload("pp-1", user_id="ctr-b"))
+        client.put("/api/user-projects/ctr-b", json={"project_name": "from-mapping"})
+        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-1"]
+        assert (row["project_name"], row["project_source"]) == ("from-mapping", "user_map"), row
+
+        # resource beats user_map
+        client.post("/v1/logs", json=make_payload("pp-1", user_id="ctr-b", project="from-container"))
+        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-1"]
+        assert (row["project_name"], row["project_source"]) == ("from-container", "resource"), row
+
+        # manual beats resource, and survives further events
+        client.patch("/api/sessions/pp-1", json={"project_name": "by-hand"})
+        client.post("/v1/logs", json=make_payload("pp-1", user_id="ctr-b", project="from-container"))
+        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-1"]
+        assert (row["project_name"], row["project_source"]) == ("by-hand", "manual"), row
+
+        # a user mapping must not clobber a container-declared project
+        client.post("/v1/logs", json=make_payload("pp-2", user_id="ctr-b", project="from-container"))
+        client.put("/api/user-projects/ctr-b", json={"project_name": "remapped"})
+        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-2"]
+        assert row["project_name"] == "from-container", row
+
+    print("OK (precedence) - manual > resource > user_map, source recorded on each")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -451,6 +510,8 @@ def main() -> None:
     test_malformed_envelope_is_a_400()
     test_cost_micros_recorded()
     test_oversized_body_rejected()
+    test_project_from_resource_attribute()
+    test_project_precedence()
     test_no_cors_headers()
     test_docs_endpoints_disabled()
     test_refuses_to_start_without_a_token()  # reloads main_module; keep last
