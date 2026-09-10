@@ -1,7 +1,8 @@
 import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { fetchSessions, fetchSummary, fetchUsageOverTime, fetchUsageOverTimeByProject } from '../api'
 import { formatCost, formatNumber } from '../format'
-import { computeHourlyRate, loadSettings } from '../settings'
+import { computeHourlyRate, loadSettings, WINDOW_HOURS, WINDOW_OPTIONS } from '../settings'
+import type { TimeWindow } from '../settings'
 import type { Metric } from './UsageChart'
 import UsageChart from './UsageChart'
 
@@ -37,9 +38,6 @@ function ToggleBtn<T extends string>(props: {
   )
 }
 
-type TimeWindow = '24h' | '7d' | '30d'
-const WINDOW_HOURS: Record<TimeWindow, number> = { '24h': 24, '7d': 168, '30d': 720 }
-
 export default function TabletDashboard() {
   const settings = loadSettings()
   const REFRESH_MS = settings.refreshIntervalMs
@@ -52,10 +50,11 @@ export default function TabletDashboard() {
 
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
   const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
-  const [usageTime, { refetch: refetchTime }] = createResource(hours, fetchUsageOverTime)
-  const [usageByProject, { refetch: refetchByProject }] = createResource(
-    hours,
-    fetchUsageOverTimeByProject,
+  const [usageTime, { refetch: refetchTime }] = createResource(timeWindow, (w) =>
+    fetchUsageOverTime(WINDOW_HOURS[w]),
+  )
+  const [usageByProject, { refetch: refetchByProject }] = createResource(timeWindow, (w) =>
+    fetchUsageOverTimeByProject(WINDOW_HOURS[w]),
   )
 
   let timer: ReturnType<typeof setInterval>
@@ -124,9 +123,16 @@ export default function TabletDashboard() {
         <div class="flex items-center gap-3">
           <h1 class="text-2xl font-bold text-slate-100">Claude Usage</h1>
           <div class="flex items-center gap-1 rounded-lg border border-slate-800 overflow-hidden">
-            <ToggleBtn value="24h" current={timeWindow()} label="24h" onClick={setTimeWindow} />
-            <ToggleBtn value="7d" current={timeWindow()} label="7d" onClick={setTimeWindow} />
-            <ToggleBtn value="30d" current={timeWindow()} label="30d" onClick={setTimeWindow} />
+            <For each={WINDOW_OPTIONS}>
+              {(opt) => (
+                <ToggleBtn
+                  value={opt.value}
+                  current={timeWindow()}
+                  label={opt.label}
+                  onClick={setTimeWindow}
+                />
+              )}
+            </For>
           </div>
           <div class="flex items-center gap-1 rounded-lg border border-slate-800 overflow-hidden">
             <ToggleBtn value="cost" current={metric()} label="Cost" onClick={setMetric} />
@@ -243,7 +249,7 @@ export default function TabletDashboard() {
 
       {/* Chart */}
       <div class="mb-5 rounded-xl bg-slate-900 border border-slate-800 overflow-hidden">
-        <UsageChart {...chartProps()} hours={24} />
+        <UsageChart {...chartProps()} />
       </div>
 
       {/* Active sessions / project list */}

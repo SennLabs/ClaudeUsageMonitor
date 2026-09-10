@@ -3,6 +3,22 @@
 Tracks Claude Code token usage and cost across multiple concurrent dev-container
 sessions, centrally, via a small ingestion API and a web dashboard.
 
+## Documentation
+
+Full documentation lives in [`docs/`](docs/README.md):
+
+| | |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Run it with Docker, or locally |
+| [Client setup](docs/client-setup.md) | Point a dev container at this instance |
+| [Architecture](docs/architecture.md) | Components, data flow, design decisions |
+| [Configuration](docs/configuration.md) | Every variable, port, and volume |
+| [API reference](docs/api-reference.md) | All endpoints and payload shapes |
+| [Data model](docs/data-model.md) | SQLite schema and OTLP attribute mapping |
+| [Dashboard guide](docs/dashboard.md) | The three views and their controls |
+| [Deployment](docs/deployment.md) · [Backup](docs/backup-and-restore.md) · [Security](docs/security.md) · [Troubleshooting](docs/troubleshooting.md) | Running it |
+| [Development](docs/development.md) | Repo layout, tests, extending it |
+
 ## How it works
 
 Claude Code has built-in OpenTelemetry export. Each dev container that opts in

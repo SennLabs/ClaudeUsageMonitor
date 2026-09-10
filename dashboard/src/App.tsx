@@ -11,7 +11,8 @@ import SessionsTable from './components/SessionsTable'
 import SummaryCards from './components/SummaryCards'
 import ThemeToggle from './components/ThemeToggle'
 import UsageChart, { type Metric } from './components/UsageChart'
-import { computeHourlyRate, loadSettings } from './settings'
+import { computeHourlyRate, loadSettings, WINDOW_HOURS, WINDOW_OPTIONS } from './settings'
+import type { TimeWindow } from './settings'
 
 function ToggleGroup<T extends string>(props: {
   value: T
@@ -38,9 +39,6 @@ function ToggleGroup<T extends string>(props: {
   )
 }
 
-type TimeWindow = '24h' | '7d' | '30d'
-const WINDOW_HOURS: Record<TimeWindow, number> = { '24h': 24, '7d': 168, '30d': 720 }
-
 export default function App() {
   const settings = loadSettings()
   const [metric, setMetric] = createSignal<Metric>(settings.defaultMetric)
@@ -51,10 +49,11 @@ export default function App() {
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
   const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
   const [usageByModel, { refetch: refetchUsage }] = createResource(fetchUsageByModel)
-  const [usageOverTime, { refetch: refetchTime }] = createResource(hours, fetchUsageOverTime)
-  const [usageByProject, { refetch: refetchByProject }] = createResource(
-    hours,
-    fetchUsageOverTimeByProject,
+  const [usageOverTime, { refetch: refetchTime }] = createResource(timeWindow, (w) =>
+    fetchUsageOverTime(WINDOW_HOURS[w]),
+  )
+  const [usageByProject, { refetch: refetchByProject }] = createResource(timeWindow, (w) =>
+    fetchUsageOverTimeByProject(WINDOW_HOURS[w]),
   )
 
   let timer: ReturnType<typeof setInterval>
@@ -96,6 +95,12 @@ export default function App() {
           <h1 class="text-lg font-semibold text-slate-900 dark:text-slate-50">Claude Usage Monitor</h1>
           <div class="flex items-center gap-3">
             <a
+              href="/users"
+              class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Users
+            </a>
+            <a
               href="/tablet"
               class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             >
@@ -130,15 +135,7 @@ export default function App() {
           {/* Chart controls */}
           <div class="mb-3 flex items-center justify-between gap-3 flex-wrap">
             <div class="flex items-center gap-2">
-              <ToggleGroup
-                value={timeWindow()}
-                options={[
-                  { value: '24h', label: '24h' },
-                  { value: '7d', label: '7d' },
-                  { value: '30d', label: '30d' },
-                ]}
-                onChange={setTimeWindow}
-              />
+              <ToggleGroup value={timeWindow()} options={WINDOW_OPTIONS} onChange={setTimeWindow} />
               <ToggleGroup
                 value={metric()}
                 options={[
@@ -157,7 +154,7 @@ export default function App() {
               onChange={setGroupBy}
             />
           </div>
-          <UsageChart {...chartProps()} hours={24} />
+          <UsageChart {...chartProps()} />
         </section>
 
         <section>

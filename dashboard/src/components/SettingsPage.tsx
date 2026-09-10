@@ -169,6 +169,12 @@ export default function SettingsPage() {
             ← Dashboard
           </a>
           <h1 class="text-lg font-semibold text-slate-900 dark:text-slate-50">Settings</h1>
+          <a
+            href="/users"
+            class="ml-auto text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 transition"
+          >
+            Users &amp; projects →
+          </a>
         </div>
       </header>
 
@@ -218,6 +224,7 @@ export default function SettingsPage() {
                 { value: '24h', label: '24 h' },
                 { value: '7d', label: '7 d' },
                 { value: '30d', label: '30 d' },
+                { value: 'all', label: 'All time' },
               ]}
               onChange={setDefaultTimeWindow}
             />

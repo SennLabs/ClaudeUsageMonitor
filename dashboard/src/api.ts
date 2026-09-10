@@ -58,6 +58,7 @@ async function getJSON<T>(path: string): Promise<T> {
 export const fetchSummary = () => getJSON<Summary>('/summary')
 export const fetchSessions = () => getJSON<SessionRow[]>('/sessions')
 export const fetchUsageByModel = () => getJSON<ModelUsage[]>('/usage-by-model')
+// hours = 0 means all time; anything else is a look-back capped at 720h.
 export const fetchUsageOverTime = (hours = 24) =>
   getJSON<UsageTimePoint[]>(`/usage-over-time?hours=${hours}`)
 
@@ -74,6 +75,44 @@ export async function updateSessionProject(
     body: JSON.stringify({ project_name: projectName }),
   })
   if (!res.ok) throw new Error(`PATCH session failed with HTTP ${res.status}`)
+}
+
+// ── Users and user -> project mappings ─────────────────────────────────────
+
+export interface UserRow {
+  user_id: string
+  project_name: string | null   // the standing mapping, not a per-session label
+  organization_id: string | null
+  session_count: number
+  active_sessions: number
+  first_seen_at: string | null
+  last_seen_at: string | null
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export const fetchUsers = () => getJSON<UserRow[]>('/users')
+export const fetchProjects = () => getJSON<string[]>('/projects')
+
+export interface UserProjectResult {
+  ok: boolean
+  project_name: string | null
+  sessions_updated: number
+}
+
+/** Link a user id to a project. An empty name unlinks it. */
+export async function setUserProject(
+  userId: string,
+  projectName: string | null,
+): Promise<UserProjectResult> {
+  const res = await fetch(`${BASE}/user-projects/${encodeURIComponent(userId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_name: projectName }),
+  })
+  if (!res.ok) throw new Error(`PUT user-project failed with HTTP ${res.status}`)
+  return res.json() as Promise<UserProjectResult>
 }
 
 export interface BackupStatus {

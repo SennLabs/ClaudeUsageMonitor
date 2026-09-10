@@ -24,23 +24,40 @@ const H = 220
 const PW = W - ML - MR
 const PH = H - MT - MB
 
+// Bucket granularity mirrors the server's _time_bucket_fmt: hourly up to 48h,
+// daily beyond that and for all-time (hours = 0). Labelling has to follow it —
+// formatting a daily bucket as a clock time renders every point identically.
+type Granularity = 'hour' | 'day'
+
+function granularityFor(hours: number | undefined): Granularity {
+  if (hours === undefined) return 'hour'
+  return hours > 0 && hours <= 48 ? 'hour' : 'day'
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 function fmtHour(iso: string) {
   const d = new Date(iso)
   return `${d.getHours().toString().padStart(2, '0')}:00`
 }
-function fmtDay(iso: string) {
+// Daily buckets are UTC day starts, so they're named in UTC. Rendering them in
+// local time would shift the date by a day for anyone west of Greenwich.
+function fmtDay(iso: string, withYear = false) {
   const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()}`
+  const base = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`
+  return withYear ? `${base} ${String(d.getUTCFullYear()).slice(2)}` : base
 }
 function fmtDateTime(iso: string) {
   const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:00`
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getHours().toString().padStart(2, '0')}:00`
 }
-function xLabel(iso: string, hours: number) {
-  return hours <= 48 ? fmtHour(iso) : fmtDay(iso)
+function xLabel(iso: string, g: Granularity, multiYear: boolean) {
+  return g === 'hour' ? fmtHour(iso) : fmtDay(iso, multiYear)
 }
-function tooltipLabel(iso: string, hours: number) {
-  return hours <= 48 ? fmtDateTime(iso) : fmtDay(iso)
+function tooltipLabel(iso: string, g: Granularity) {
+  if (g === 'hour') return fmtDateTime(iso)
+  const d = new Date(iso)
+  return `${fmtDay(iso)} ${d.getUTCFullYear()}`
 }
 function fmtY(v: number, metric: Metric) {
   if (metric === 'cost') return `$${v.toFixed(2)}`
@@ -114,6 +131,20 @@ export default function UsageChart(props: UsageChartProps) {
     return [...set].sort()
   })
 
+  const granularity = createMemo(() => granularityFor(props.hours))
+
+  // Only disambiguate with a year when the window actually crosses one —
+  // realistically only the all-time view.
+  const multiYear = createMemo(() => {
+    const b = allBuckets()
+    if (b.length === 0) return false
+    return b[0].slice(0, 4) !== b[b.length - 1].slice(0, 4)
+  })
+
+  // All-time can return hundreds of daily buckets; per-point circles stop being
+  // legible (and stop being cheap) long before that.
+  const showDots = createMemo(() => allBuckets().length <= 60)
+
   const maxVal = createMemo(() =>
     niceMax(Math.max(...series().flatMap((s) => s.points.map((p) => p.value)), 0)),
   )
@@ -158,7 +189,7 @@ export default function UsageChart(props: UsageChartProps) {
         const n = allBuckets().length
         return {
           x: ML + (idx / Math.max(n - 1, 1)) * PW,
-          label: xLabel(b, props.hours ?? 24),
+          label: xLabel(b, granularity(), multiYear()),
         }
       })
   })
@@ -199,7 +230,7 @@ export default function UsageChart(props: UsageChartProps) {
                 </span>
                 {'·'}{' '}
               </Show>
-              {tooltipLabel(info().bucket, props.hours ?? 24)} —{' '}
+              {tooltipLabel(info().bucket, granularity())} —{' '}
               <span class="font-semibold" style={{ color: info().color }}>
                 {props.metric === 'cost' ? `$${info().value.toFixed(2)}` : info().value.toLocaleString()}
               </span>
@@ -275,7 +306,7 @@ export default function UsageChart(props: UsageChartProps) {
                   stroke-linejoin="round" stroke-linecap="round" />
 
                 {/* Dots */}
-                <For each={sp.coords}>
+                <For each={showDots() ? sp.coords : sp.coords.filter((c) => c.bucket === hoveredBucket())}>
                   {(c) => (
                     <circle cx={c.x} cy={c.y}
                       r={hoveredBucket() === c.bucket && (!isMulti() || hoveredSeries() === si()) ? 5 : 3}
@@ -314,7 +345,7 @@ export default function UsageChart(props: UsageChartProps) {
           </For>
 
           {/* Per-series hit rects (only in multi mode, to identify which line) */}
-          <Show when={isMulti()}>
+          <Show when={isMulti() && showDots()}>
             <For each={seriesPaths()}>
               {(sp, si) => (
                 <For each={sp.coords}>
