@@ -33,9 +33,18 @@ take down ingestion.
 | `BACKUP_KEEP` | `7` | Snapshots to retain — **copy mode only** |
 | `BACKUP_SSH_KEY` | *(empty)* | Path inside the container to the private key for rsync mode |
 
-Mode is chosen by inspecting the destination string: it is treated as remote if
-it contains both `@` and `:` (`_is_remote`). A local path containing an `@` would
-be misread as remote — avoid that.
+Mode is `BACKUP_MODE` when you set it. Otherwise it is inferred: `user@host:/path`
+means rsync, an absolute path means copy, **and anything else is rejected** —
+backups are disabled and the reason appears in `/api/backup/status`.
+
+That last part matters. The old rule was "contains `@` and `:`", which
+classified `nas:/volume1/backups` — an ordinary SSH destination that omits the
+user — as *local*. It created a directory called `nas:` inside the container,
+reported every backup as succeeding, and lost the lot on the next rebuild.
+
+Two more guards in copy mode: the destination directory must already exist (a
+typo'd path is not created for you), and it may not be the database's own
+directory (a backup there dies with the thing it protects).
 
 ## Option A — local or mounted path
 
@@ -103,7 +112,9 @@ Two things to know about rsync mode:
 
 - **`BACKUP_KEEP` is ignored.** Nothing prunes the remote. Each run adds a new
   timestamped file and they accumulate until you clean up — a cron job on the
-  NAS, or a snapshot/retention policy there.
+  NAS, or a snapshot/retention policy there. `/api/backup/status` returns
+  `keep: null` and a warning saying so, rather than reporting a retention
+  policy that is not being applied.
 - **A trailing slash on the destination matters** to rsync. Use one, as in the
   example, so files land *in* the directory.
 
@@ -117,9 +128,12 @@ docker compose exec ingest ssh -i /run/secrets/backup_key \
 ## Scheduling behaviour
 
 `start_scheduler` is launched from the FastAPI lifespan when backups are
-enabled. It **waits one full interval before the first run** — a container that
-restarts more often than `BACKUP_INTERVAL_HOURS` will never produce a scheduled
-backup. If you restart often, either shorten the interval or trigger manually.
+enabled. The first run happens `BACKUP_FIRST_RUN_DELAY_SECONDS` after startup
+(default 60), then on the interval.
+
+Before 2026-09-10 it waited a **full interval** first, so a container
+redeployed nightly with the 24-hour default never backed up at all — while the
+status endpoint reported `enabled: true` with a `next_backup_at` a day out.
 
 The next run is computed after the previous one completes, so a slow backup
 pushes the following one out rather than overlapping.
@@ -138,6 +152,12 @@ curl -X POST -H "Authorization: Bearer $INGEST_AUTH_TOKEN" \
 
 Runs one cycle immediately and returns the resulting status. It does not shift
 the scheduled next run.
+
+- `409` if a backup is already in flight. Only one runs at a time.
+- `400` if no destination is configured, or the configuration is invalid.
+- **`500` if the run happened and failed.** It previously returned `200`
+  regardless, so the dashboard reported success for a backup that had not been
+  written.
 
 ## Checking status
 

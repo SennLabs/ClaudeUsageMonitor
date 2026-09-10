@@ -5,6 +5,7 @@ import {
   fetchUsageByModel,
   fetchUsageOverTime,
   fetchUsageOverTimeByProject,
+  fetchSpendRate,
 } from './api'
 import { formatCost, formatNumber } from './format'
 import ModelBreakdown from './components/ModelBreakdown'
@@ -13,7 +14,7 @@ import SummaryCards from './components/SummaryCards'
 import ThemeToggle from './components/ThemeToggle'
 import UsageChart, { type Metric } from './components/UsageChart'
 import { errorMessage, firstError, latest } from './resource'
-import { computeHourlyRate, WINDOW_HOURS, WINDOW_OPTIONS } from './settings'
+import { WINDOW_HOURS, WINDOW_OPTIONS } from './settings'
 import type { TimeWindow } from './settings'
 import { settings } from './settingsStore'
 
@@ -45,6 +46,10 @@ function ToggleGroup<T extends string>(props: {
 export default function App() {
   const [metric, setMetric] = createSignal<Metric | null>(null)
   const [groupBy, setGroupBy] = createSignal<'session' | 'project'>('session')
+  // Set while a row in SessionsTable is being edited. <For> keys by reference,
+  // so a refetch rebuilds every row and destroys the open input — on iOS the
+  // keyboard closes and cannot reopen, making the field untypeable.
+  const [editing, setEditing] = createSignal(false)
   const [timeWindow, setTimeWindow] = createSignal<TimeWindow | null>(null)
 
   // Null until the user picks one, so the server-configured default applies as
@@ -54,6 +59,7 @@ export default function App() {
   const hours = createMemo(() => WINDOW_HOURS[activeWindow()])
 
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
+  const [spendRate, { refetch: refetchRate }] = createResource(fetchSpendRate)
   const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
   const [usageByModel, { refetch: refetchUsage }] = createResource(fetchUsageByModel)
   const [usageOverTime, { refetch: refetchTime }] = createResource(activeWindow, (w) =>
@@ -67,7 +73,9 @@ export default function App() {
   // effect immediately instead of on the next page load.
   createEffect(() => {
     const timer = setInterval(() => {
+      if (editing()) return
       refetchSummary()
+      refetchRate()
       refetchSessions()
       refetchUsage()
       refetchTime()
@@ -76,9 +84,7 @@ export default function App() {
     onCleanup(() => clearInterval(timer))
   })
 
-  const costRatePerHour = createMemo(() =>
-    computeHourlyRate(latest(usageOverTime) ?? [], hours()),
-  )
+  const costRatePerHour = () => latest(spendRate)?.cost_usd_per_hour ?? 0
 
   const alertActive = createMemo(() => {
     const t = settings().costAlertThresholdPerHour
@@ -86,7 +92,7 @@ export default function App() {
   })
 
   const apiError = createMemo(() =>
-    firstError(summary, sessions, usageByModel, usageOverTime, usageByProject),
+    firstError(summary, spendRate, sessions, usageByModel, usageOverTime, usageByProject),
   )
 
   const chartProps = createMemo(() =>
@@ -191,7 +197,11 @@ export default function App() {
               onChange={setGroupBy}
             />
           </div>
-          <SessionsTable sessions={latest(sessions)} groupByProject={groupBy() === 'project'} />
+          <SessionsTable
+            sessions={latest(sessions)}
+            groupByProject={groupBy() === 'project'}
+            onEditingChange={setEditing}
+          />
         </section>
 
         <section>

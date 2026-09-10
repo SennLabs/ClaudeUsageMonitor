@@ -644,6 +644,83 @@ def test_unattributed_events_are_reported() -> None:
     print("OK (unattributed) - the gap between headline and per-session totals is reported")
 
 
+
+def test_backup_configuration_guards() -> None:
+    """Every backup misconfiguration that used to report success."""
+    import app.backup as backup_module
+
+    saved = {k: os.environ.get(k) for k in
+             ("BACKUP_DESTINATION", "BACKUP_MODE", "BACKUP_INTERVAL_HOURS", "BACKUP_KEEP")}
+
+    def reload_with(**env):
+        for key in saved:
+            os.environ.pop(key, None)
+        os.environ.update({k: str(v) for k, v in env.items()})
+        importlib.reload(backup_module)
+        return backup_module
+
+    root = Path(tempfile.mkdtemp(prefix="claude-usage-backup-"))
+    db_dir = root / "data"; db_dir.mkdir()
+    dest = root / "backups"; dest.mkdir()
+    db_file = db_dir / "usage.db"
+    sqlite3.connect(db_file).execute("CREATE TABLE t (x)")
+
+    try:
+        # Rejected outright — backups disabled, reason reported, service unaffected
+        for env, fragment in (
+            ({"BACKUP_DESTINATION": "nas:/volume1/backups"}, "cannot tell whether"),
+            ({"BACKUP_DESTINATION": dest, "BACKUP_INTERVAL_HOURS": 0}, "below the minimum"),
+            ({"BACKUP_DESTINATION": dest, "BACKUP_INTERVAL_HOURS": "daily"}, "is not a number"),
+            ({"BACKUP_DESTINATION": dest, "BACKUP_KEEP": 0}, "below the minimum"),
+        ):
+            b = reload_with(**env)
+            assert b.ENABLED is False, env
+            assert fragment in (b.status()["config_error"] or ""), b.status()
+
+        # Accepted, but the run must fail loudly rather than report success
+        for env, fragment in (
+            ({"BACKUP_DESTINATION": db_dir}, "own directory"),
+            ({"BACKUP_DESTINATION": root / "missing"}, "does not exist"),
+        ):
+            b = reload_with(**env)
+            b.run_backup(db_file)
+            assert b.status()["last_backup_ok"] is False, env
+            assert fragment in b.status()["last_backup_error"], b.status()
+
+        # A working local destination, with retention actually applied
+        b = reload_with(BACKUP_DESTINATION=dest, BACKUP_KEEP=2)
+        for _ in range(3):
+            b.run_backup(db_file)
+        assert b.status()["last_backup_ok"] is True, b.status()
+        assert len(list(dest.glob("usage_backup_*.db"))) == 2, list(dest.iterdir())
+
+        # Concurrency: the second caller is told, not silently collided with
+        b._RUN_LOCK.acquire()
+        try:
+            b.run_backup(db_file)
+        except b.BackupBusy:
+            pass
+        else:
+            raise AssertionError("expected BackupBusy while a run holds the lock")
+        finally:
+            b._RUN_LOCK.release()
+
+        # rsync mode is explicit about retention not applying
+        b = reload_with(BACKUP_DESTINATION="user@nas:/volume1/b/", BACKUP_MODE="rsync")
+        st = b.status()
+        assert st["enabled"] and st["method"] == "rsync-ssh" and st["keep"] is None, st
+        assert st["warnings"], st
+    finally:
+        for key, value in saved.items():
+            os.environ.pop(key, None)
+            if value is not None:
+                os.environ[key] = value
+        importlib.reload(backup_module)
+        shutil.rmtree(root, ignore_errors=True)
+
+    print("OK (backup config) - bad configs disabled or failed loudly, retention applied")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -663,6 +740,7 @@ def main() -> None:
     test_promoted_attributes_are_queryable()
     test_errors_and_tools_views()
     test_unattributed_events_are_reported()
+    test_backup_configuration_guards()
     test_no_cors_headers()
     test_docs_endpoints_disabled()
     test_refuses_to_start_without_a_token()  # reloads main_module; keep last

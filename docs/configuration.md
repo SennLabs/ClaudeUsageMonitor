@@ -18,9 +18,11 @@ cp .env.example .env
 | `INGEST_ALLOW_ANONYMOUS` | *(unset)* | Set to `true` to deliberately run with authentication disabled on a trusted network. A prominent warning is logged at startup. |
 | `DB_PATH` | `ingest/usage.db` (repo) / `/data/usage.db` (container) | Absolute path to the SQLite file. Set in the Dockerfile so a mounted volume keeps data across container recreation. |
 | `ACTIVE_WINDOW_MINUTES` | `15` | How long a session may go quiet before it stops counting as active. Also the grace period before an unused session is purged. |
-| `BACKUP_DESTINATION` | *(empty)* | Where snapshots go. Empty disables backups. A local path enables copy mode; a `user@host:/path` string enables rsync-over-SSH mode. |
-| `BACKUP_INTERVAL_HOURS` | `24` | Hours between scheduled backups. Decimals allowed (`0.5` = every 30 min). |
-| `BACKUP_KEEP` | `7` | How many timestamped snapshots to retain. **Local/copy mode only** — remote pruning is not performed. |
+| `BACKUP_DESTINATION` | *(empty)* | Where snapshots go. Empty disables backups. An absolute path means copy mode; `user@host:/path` means rsync. The directory must already exist — it is not created. |
+| `BACKUP_MODE` | *(inferred)* | `local` or `rsync`. Required when the destination is ambiguous, e.g. `nas:/vol/backups` with no `user@`. |
+| `BACKUP_INTERVAL_HOURS` | `24` | Hours between scheduled backups. Decimals allowed (`0.5` = every 30 min); minimum one minute. A non-numeric or too-small value disables backups and is reported in the status. |
+| `BACKUP_KEEP` | `7` | How many timestamped snapshots to retain. Minimum 1. **Copy mode only** — nothing prunes an rsync destination, and the status says so. |
+| `BACKUP_FIRST_RUN_DELAY_SECONDS` | `60` | How long after startup the first scheduled backup runs. |
 | `BACKUP_SSH_KEY` | *(empty)* | Path *inside the container* to a private key for rsync mode. Mount it in as a read-only volume. |
 | `LOG_LEVEL` | `INFO` | Level for this application's loggers. Backup and purge activity is logged at INFO; third-party loggers stay at WARNING regardless. |
 | `DB_BUSY_TIMEOUT_SECONDS` | `15` | How long a write waits for the SQLite lock before failing. A failure here becomes a 500, which an exporter retries — waiting is better. |

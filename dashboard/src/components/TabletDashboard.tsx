@@ -1,8 +1,15 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show } from 'solid-js'
-import { fetchBudget, fetchSessions, fetchSummary, fetchUsageOverTime, fetchUsageOverTimeByProject } from '../api'
-import { formatCost, formatNumber } from '../format'
+import {
+  fetchBudget,
+  fetchSessions,
+  fetchSpendRate,
+  fetchSummary,
+  fetchUsageOverTime,
+  fetchUsageOverTimeByProject,
+} from '../api'
+import { formatCost, formatNumber, formatTokens } from '../format'
 import { errorMessage, firstError, latest } from '../resource'
-import { computeHourlyRate, WINDOW_HOURS, WINDOW_OPTIONS } from '../settings'
+import { WINDOW_HOURS, WINDOW_OPTIONS } from '../settings'
 import { settings } from '../settingsStore'
 import type { TimeWindow } from '../settings'
 import type { Metric } from './UsageChart'
@@ -53,6 +60,7 @@ export default function TabletDashboard() {
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
   const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
   const [budgetUsage, { refetch: refetchBudget }] = createResource(fetchBudget)
+  const [spendRate, { refetch: refetchRate }] = createResource(fetchSpendRate)
   const [usageTime, { refetch: refetchTime }] = createResource(activeWindow, (w) =>
     fetchUsageOverTime(WINDOW_HOURS[w]),
   )
@@ -69,6 +77,7 @@ export default function TabletDashboard() {
       refetchSummary()
       refetchSessions()
       refetchBudget()
+      refetchRate()
       refetchTime()
       refetchByProject()
       setCountdown(ms / 1000)
@@ -81,13 +90,31 @@ export default function TabletDashboard() {
     onCleanup(() => clearInterval(countdownTimer))
   })
 
+  // A backgrounded or slept tablet has its timers throttled to roughly once a
+  // minute while the countdown bar keeps animating as though it were live.
+  // Refetch the moment it comes back.
+  createEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      refetchSummary()
+      refetchSessions()
+      refetchBudget()
+      refetchRate()
+      refetchTime()
+      refetchByProject()
+      setCountdown(settings().refreshIntervalMs / 1000)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    onCleanup(() => document.removeEventListener('visibilitychange', onVisible))
+  })
+
   const activeSessions = createMemo(() =>
     (latest(sessions) ?? []).filter((s) =>
       isActive(s.last_seen_at, settings().activeSessionWindowMin),
     ),
   )
 
-  const costRatePerHour = createMemo(() => computeHourlyRate(latest(usageTime) ?? [], hours()))
+  const costRatePerHour = () => latest(spendRate)?.cost_usd_per_hour ?? 0
 
   const alertActive = createMemo(() => {
     const t = settings().costAlertThresholdPerHour
@@ -119,8 +146,25 @@ export default function TabletDashboard() {
   )
 
   const apiError = createMemo(() =>
-    firstError(summary, sessions, budgetUsage, usageTime, usageByProject),
+    firstError(summary, sessions, budgetUsage, spendRate, usageTime, usageByProject),
   )
+
+  // Hoisted out of an IIFE inside <Show>'s children. It was safe only because
+  // createMemo opens its own tracking scope; one bare signal read beside it
+  // would have rebuilt the whole list on every poll.
+  const projectMap = createMemo(() => {
+    const map = new Map<string, { cost: number; active: number; sessions: number }>()
+    for (const s of latest(sessions) ?? []) {
+      const key = s.project_name ?? '(untagged)'
+      const cur = map.get(key) ?? { cost: 0, active: 0, sessions: 0 }
+      map.set(key, {
+        cost: cur.cost + s.cost_usd,
+        active: cur.active + (isActive(s.last_seen_at, settings().activeSessionWindowMin) ? 1 : 0),
+        sessions: cur.sessions + 1,
+      })
+    }
+    return [...map.entries()].sort((a, b) => b[1].cost - a[1].cost)
+  })
 
   const chartProps = createMemo(() =>
     groupBy() === 'project'
@@ -215,9 +259,7 @@ export default function TabletDashboard() {
           fallback={
             <StatCard
               label="Total tokens"
-              value={totalTokens() >= 1_000_000
-                ? `${(totalTokens() / 1_000_000).toFixed(1)}M`
-                : `${(totalTokens() / 1_000).toFixed(0)}k`}
+              value={formatTokens(totalTokens())}
               accent="text-sky-400"
               sub={`${formatNumber(latest(summary)?.total_input_tokens ?? 0)} in · ${formatNumber(latest(summary)?.total_output_tokens ?? 0)} out`}
             />
@@ -261,8 +303,13 @@ export default function TabletDashboard() {
       </Show>
 
       {/* Chart */}
-      <div class="mb-5 rounded-xl bg-slate-900 border border-slate-800 overflow-hidden">
-        <UsageChart {...chartProps()} />
+      {/* This view is hardcoded dark and has no theme toggle, so the chart must
+          not inherit the light palette. Its axis text and gridlines use
+          currentColor: without this, choosing Light once on / left the wall
+          tablet showing white labels on a white card, with no way to change it
+          from this route. */}
+      <div class="mb-5 rounded-xl bg-slate-900 border border-slate-800 overflow-hidden p-1 text-slate-400">
+        <UsageChart {...chartProps()} bare />
       </div>
 
       {/* Active sessions / project list */}
@@ -309,19 +356,6 @@ export default function TabletDashboard() {
         >
           {/* Project grouped view */}
           {(() => {
-            const projectMap = createMemo(() => {
-              const map = new Map<string, { cost: number; active: number; sessions: number }>()
-              for (const s of latest(sessions) ?? []) {
-                const key = s.project_name ?? '(untagged)'
-                const cur = map.get(key) ?? { cost: 0, active: 0, sessions: 0 }
-                map.set(key, {
-                  cost: cur.cost + s.cost_usd,
-                  active: cur.active + (isActive(s.last_seen_at, settings().activeSessionWindowMin) ? 1 : 0),
-                  sessions: cur.sessions + 1,
-                })
-              }
-              return [...map.entries()].sort((a, b) => b[1].cost - a[1].cost)
-            })
 
             return (
               <Show

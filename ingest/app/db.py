@@ -796,6 +796,34 @@ def fetch_attribution(hours: int | None = 24) -> dict:
         return {key: by(conn, column) for key, column in dimensions.items()}
 
 
+def fetch_spend_rate(minutes: int = 60) -> dict:
+    """
+    Spend over a true trailing window, from raw event timestamps.
+
+    The client used to derive this from chart buckets, which made it a sawtooth:
+    the hourly branch only ever caught the current clock-hour bucket, so the
+    cost alert dropped to near zero on the hour and climbed back mid-hour, and
+    the daily branch divided a partial UTC day by 24.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0)  AS cost_usd,
+                   COUNT(*)                    AS events
+              FROM usage_events
+             WHERE occurred_at >= ?
+            """,
+            (_cutoff(minutes),),
+        ).fetchone()
+    scale = 60 / minutes
+    return {
+        "window_minutes": minutes,
+        "cost_usd": row["cost_usd"],
+        "cost_usd_per_hour": row["cost_usd"] * scale,
+        "events": row["events"],
+    }
+
+
 def fetch_latency(hours: int | None = 24) -> dict:
     """API request latency. SQLite has no percentile function, so p50/p95 are
     read positionally out of the ordered set."""

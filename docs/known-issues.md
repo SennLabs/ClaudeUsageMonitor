@@ -29,8 +29,8 @@ single-instance internal tool on a private network.
 - [x] [5. Ingest blocks its own event loop](#5-ingest-blocks-its-own-event-loop) — *fixed*
 - [x] [6. Batches are not atomic, so failures permanently inflate totals](#6-batches-are-not-atomic-so-failures-permanently-inflate-totals) — *fixed*
 - [x] [7. Malformed OTLP payloads return 500 instead of 400](#7-malformed-otlp-payloads-return-500-instead-of-400) — *fixed*
-- [ ] [8. Backups fail silently in several ordinary configurations](#8-backups-fail-silently-in-several-ordinary-configurations) — *verified*
-- [ ] [9. Concurrent backups collide on one temp file](#9-concurrent-backups-collide-on-one-temp-file) — *reported*
+- [x] [8. Backups fail silently in several ordinary configurations](#8-backups-fail-silently-in-several-ordinary-configurations) — *fixed*
+- [x] [9. Concurrent backups collide on one temp file](#9-concurrent-backups-collide-on-one-temp-file) — *fixed*
 - [x] [31. User-ID mapping breaks on every dev container rebuild](#31-user-id-mapping-breaks-on-every-dev-container-rebuild) — *fixed*
 
 **P2 — should fix**
@@ -39,10 +39,10 @@ single-instance internal tool on a private network.
 - [x] [11. `ACTIVE_WINDOW_MINUTES` is not passed through Compose](#11-active_window_minutes-is-not-passed-through-compose) — *fixed*
 - [x] [12. Three different "active session" windows](#12-three-different-active-session-windows) — *fixed*
 - [x] [13. Events with no `session.id` inflate the headline only](#13-events-with-no-sessionid-inflate-the-headline-only) — *fixed*
-- [ ] [14. `computeHourlyRate` is a sawtooth, not a rate](#14-computehourlyrate-is-a-sawtooth-not-a-rate) — *reported*
-- [ ] [15. Polling destroys an in-progress inline edit](#15-polling-destroys-an-in-progress-inline-edit) — *reported*
-- [ ] [16. Chart rendering edge cases](#16-chart-rendering-edge-cases) — *reported*
-- [ ] [17. `/tablet` in light theme has invisible chart axes](#17-tablet-in-light-theme-has-invisible-chart-axes) — *reported*
+- [x] [14. `computeHourlyRate` is a sawtooth, not a rate](#14-computehourlyrate-is-a-sawtooth-not-a-rate) — *fixed*
+- [x] [15. Polling destroys an in-progress inline edit](#15-polling-destroys-an-in-progress-inline-edit) — *fixed*
+- [x] [16. Chart rendering edge cases](#16-chart-rendering-edge-cases) — *fixed*
+- [x] [17. `/tablet` in light theme has invisible chart axes](#17-tablet-in-light-theme-has-invisible-chart-axes) — *fixed*
 - [x] [18. Empty `INGEST_AUTH_TOKEN` silently disables all authentication](#18-empty-ingest_auth_token-silently-disables-all-authentication) — *fixed*
 - [x] [19. `/docs`, `/redoc` and `/openapi.json` are unauthenticated](#19-docs-redoc-and-openapijson-are-unauthenticated) — *fixed*
 - [ ] [20. No body-size cap on `POST /v1/logs`, and no retention policy](#20-no-body-size-cap-on-post-v1logs-and-no-retention-policy) — *reported*
@@ -55,8 +55,8 @@ single-instance internal tool on a private network.
 - [ ] [24. `/api/sessions` is a hard `LIMIT 100` with no pagination](#24-apisessions-is-a-hard-limit-100-with-no-pagination) — *reported*
 - [ ] [25. Data-quality gaps in the OTLP parser](#25-data-quality-gaps-in-the-otlp-parser) — *reported*
 - [ ] [26. Robustness details in the purge and shutdown paths](#26-robustness-details-in-the-purge-and-shutdown-paths) — *reported*
-- [ ] [27. Settings and formatting papercuts](#27-settings-and-formatting-papercuts) — *reported*
-- [ ] [28. Touch and kiosk ergonomics on `/tablet`](#28-touch-and-kiosk-ergonomics-on-tablet) — *reported*
+- [x] [27. Settings and formatting papercuts](#27-settings-and-formatting-papercuts) — *fixed*
+- [x] [28. Touch and kiosk ergonomics on `/tablet`](#28-touch-and-kiosk-ergonomics-on-tablet) — *fixed*
 - [ ] [29. TypeScript `strict` is off](#29-typescript-strict-is-off) — *verified*
 - [ ] [30. Backup SSH trust and argument quoting](#30-backup-ssh-trust-and-argument-quoting) — *reported*
 
@@ -228,7 +228,9 @@ genuinely malformed body.
 
 ### 8. Backups fail silently in several ordinary configurations
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Each row of that table now either disables backups with a reason in `/api/backup/status`, or fails the run loudly. `BACKUP_MODE` replaces the `@`/`:` heuristic and an ambiguous destination is rejected rather than guessed; interval and keep are validated with floors; the destination directory must already exist and may not be the database's own; the first scheduled run happens 60s after startup; and rsync mode reports `keep: null` plus a warning instead of implying a retention policy it does not apply. Invalid config disables backups but never stops ingestion.
 
 All in `ingest/app/backup.py`. Grouped because they share one root cause —
 `run_backup` never raises and `POST /api/backup/trigger` returns 200 regardless,
@@ -253,7 +255,9 @@ destination is a real mount point rather than creating it; run once at startup
 
 ### 9. Concurrent backups collide on one temp file
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** A non-blocking module lock means the second caller gets `BackupBusy` (409) instead of colliding; snapshot names carry a uuid suffix; rsync runs in its own process group so a timeout kills the ssh child too, with `--` before the paths. `POST /api/backup/trigger` now returns 500 when the run it performed failed, rather than 200 with the failure buried in the body.
 
 `backup.py:38` names the snapshot from a **1-second-resolution** timestamp in
 `db_path.parent`, and there is no lock — the scheduler and
@@ -383,7 +387,9 @@ diverging totals are the worst option.
 
 ### 14. `computeHourlyRate` is a sawtooth, not a rate
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Replaced with `GET /api/rate`, computed server-side from raw event timestamps over a true trailing window. The client function is gone rather than patched — deriving a rate from chart buckets was the problem, not the arithmetic.
 
 `settings.ts:69` — the hourly branch filters bucket **start times** against
 `now - 1h`, so only the current clock-hour bucket ever passes: it reports "spend
@@ -400,7 +406,9 @@ event timestamps.
 
 ### 15. Polling destroys an in-progress inline edit
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `SessionsTable` reports its edit state upward and the dashboard skips refetches while a row is open, matching what `UsersPage` already did.
 
 `SessionsTable.tsx:205` — `<For>` keys by reference and every poll yields
 freshly-parsed objects, so all rows are disposed and rebuilt every
@@ -414,7 +422,9 @@ same guard here, and consider `<For>` with a keyed wrapper or `<Index>`.
 
 ### 16. Chart rendering edge cases
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** A single bucket draws a dot with no area wedge; per-series hover targets no longer depend on the dot cap, so the tooltip names the right line above 60 buckets; moving between columns clears the pinned series; and y-axis labels scale their precision, so a sub-cent peak no longer renders five identical `$0.00` and token axes stay integral.
 
 - `UsageChart.tsx:168` — a **single bucket** puts every point at `x = ML`, so the
   line renders as nothing and the area becomes a triangle spanning the full plot
@@ -434,7 +444,9 @@ same guard here, and consider `<For>` with a keyed wrapper or `<Index>`.
 
 ### 17. `/tablet` in light theme has invisible chart axes
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `UsageChart` takes a `bare` prop that drops its own card chrome, and the tablet supplies an explicit dark background and text colour so the chart cannot inherit the light palette.
 
 `TabletDashboard.tsx` is hardcoded `bg-slate-950 text-white` and has no
 `ThemeToggle`, while the chart card is `bg-white dark:bg-slate-900` and all axis
@@ -571,7 +583,9 @@ you pass 100 sessions.
 
 ### 27. Settings and formatting papercuts
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `setPrice` went with the model-price removal in Batch 5. `formatTokens` replaces the `0k` headline, `localStorage` writes are guarded in both the theme toggle and the pre-paint script, and the `projectMap` memo is hoisted out of the JSX IIFE to component scope.
 
 - `SettingsPage.tsx:131` — `setPrice` early-returns on `isNaN`, so clearing a
   price field leaves the DOM empty while the old value is still saved. The only
@@ -588,7 +602,9 @@ you pass 100 sessions.
 
 ### 28. Touch and kiosk ergonomics on `/tablet`
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Partly fixed 2026-09-10.** The chart uses pointer events rather than mouse-only handlers, so it responds to touch, and both dashboards refetch on `visibilitychange` so a slept tablet catches up immediately instead of showing stale data behind a live-looking countdown. Tap target sizing is still untouched.
 
 The chart is hover-only (`onMouseEnter`, no pointer or touch handlers);
 `ToggleBtn` gives roughly 24 px tap targets on a wall display; and neither

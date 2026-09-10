@@ -231,6 +231,12 @@ async def get_attribution(hours: int = 24):
     return db.fetch_attribution(hours=_window(hours))
 
 
+@app.get("/api/rate", dependencies=[Depends(require_auth)])
+async def get_rate(minutes: int = 60):
+    """Spend over a true trailing window, for the cost alert."""
+    return db.fetch_spend_rate(minutes=max(1, min(minutes, 1440)))
+
+
 @app.get("/api/latency", dependencies=[Depends(require_auth)])
 async def get_latency(hours: int = 24):
     return db.fetch_latency(hours=_window(hours))
@@ -290,6 +296,16 @@ async def get_backup_status():
 async def trigger_backup():
     if not backup.DESTINATION:
         raise HTTPException(status_code=400, detail="BACKUP_DESTINATION is not configured")
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, lambda: backup.run_backup(db.DB_PATH))
-    return backup.status()
+    if backup.CONFIG_ERROR:
+        raise HTTPException(status_code=400, detail=backup.CONFIG_ERROR)
+    try:
+        await asyncio.to_thread(backup.run_backup, db.DB_PATH)
+    except backup.BackupBusy:
+        raise HTTPException(status_code=409, detail="A backup is already running")
+
+    result = backup.status()
+    if result["last_backup_ok"] is False:
+        # The run happened and failed. Returning 200 here meant the UI showed a
+        # success toast while the backup had not been written.
+        raise HTTPException(status_code=500, detail=result["last_backup_error"])
+    return result

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
 import type { SessionRow } from '../api'
 import { updateSessionProject } from '../api'
 import { formatCost, formatNumber, formatTime } from '../format'
@@ -139,12 +139,16 @@ function GroupedTable(props: { sessions: SessionRow[] }) {
 export default function SessionsTable(props: {
   sessions: SessionRow[] | undefined
   groupByProject?: boolean
+  /** Lets the parent pause polling while a row is being edited. */
+  onEditingChange?: (editing: boolean) => void
 }) {
   const [projectNames, setProjectNames] = createSignal<Record<string, string | null>>({})
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [editValue, setEditValue] = createSignal('')
   const [saving, setSaving] = createSignal(false)
   const [saveError, setSaveError] = createSignal<string | null>(null)
+
+  createEffect(() => props.onEditingChange?.(editingId() !== null))
 
   function startEdit(session: SessionRow) {
     const current = projectNames()[session.session_id] ?? session.project_name

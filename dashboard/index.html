@@ -8,7 +8,13 @@
     <script>
       // Runs before paint so there's no flash of the wrong theme.
       // Defaults to dark unless the user has explicitly chosen light before.
-      if (localStorage.getItem('theme') !== 'light') {
+      // localStorage throws outright in some contexts (blocked site data,
+      // thumbnail capture). An uncaught throw here runs before the app loads.
+      try {
+        if (localStorage.getItem('theme') !== 'light') {
+          document.documentElement.classList.add('dark')
+        }
+      } catch {
         document.documentElement.classList.add('dark')
       }
     </script>

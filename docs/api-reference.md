@@ -374,6 +374,22 @@ Cost split by the dimensions other than model and project. Each key holds up to
 redaction: user-defined agents report as `custom` and third-party skills and
 plugins as `third-party` unless the client sets `OTEL_LOG_TOOL_DETAILS=1`.
 
+### `GET /api/rate`
+
+Spend over a true trailing window, for the cost alert.
+
+| Query param | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `minutes` | int | `60` | Clamped to 1–1440 |
+
+```json
+{"window_minutes": 60, "cost_usd": 1.42, "cost_usd_per_hour": 1.42, "events": 37}
+```
+
+Computed from raw event timestamps rather than chart buckets. The client-side
+version was a sawtooth — it only ever caught the current clock-hour bucket, so
+the alert dropped to near zero on the hour and climbed back mid-hour.
+
 ### `GET /api/latency`
 
 ```json
@@ -490,8 +506,12 @@ the cycle day.
 }
 ```
 
-- `method` is `"rsync-ssh"` when the destination looks remote (contains both
-  `@` and `:`), otherwise `"copy"`.
+- `method` is `"rsync-ssh"` or `"copy"`, from `BACKUP_MODE` or inferred from
+  the destination shape.
+- `keep` is `null` in rsync mode, where retention is not applied.
+- `config_error` is non-null when a setting is invalid; backups are disabled
+  but ingestion is unaffected.
+- `warnings` lists conditions worth knowing that are not errors.
 - `last_*` fields are in-memory only and reset to `null` on restart. They
   describe this process's history, not the destination's contents.
 - With backups disabled, `enabled` is `false` and `destination` is `null`.
@@ -503,9 +523,9 @@ the cycle day.
 Runs one backup immediately, synchronously (offloaded to a thread so the event
 loop keeps serving), and returns the same body as `/api/backup/status`.
 
-- `400` `{"detail": "BACKUP_DESTINATION is not configured"}` when backups are off.
-- A backup that *runs* but fails still returns `200`; the failure shows in
-  `last_backup_ok: false` and `last_backup_error`.
+- `400` when no destination is configured, or the configuration is invalid.
+- `409` when a backup is already running.
+- `500` when the run happened and failed — the body's `detail` is the error.
 - Triggering manually does not shift the scheduled `next_backup_at`.
 
 ---

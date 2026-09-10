@@ -14,6 +14,16 @@ export interface Attribution {
   by_speed: AttributionRow[]
 }
 
+export interface SpendRate {
+  window_minutes: number
+  cost_usd: number
+  cost_usd_per_hour: number
+  events: number
+}
+
+/** Spend over a true trailing window, computed server-side from raw timestamps. */
+export const fetchSpendRate = () => getJSON<SpendRate>('/rate')
+
 export interface Latency {
   requests: number
   avg_ms: number | null

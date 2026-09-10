@@ -59,16 +59,26 @@ function tooltipLabel(iso: string, g: Granularity) {
   const d = new Date(iso)
   return `${fmtDay(iso)} ${d.getUTCFullYear()}`
 }
-function fmtY(v: number, metric: Metric) {
-  if (metric === 'cost') return `$${v.toFixed(2)}`
+function fmtY(v: number, metric: Metric, max: number) {
+  if (metric === 'cost') {
+    // Scale precision to the axis. niceMax can return sub-cent maxima, where
+    // toFixed(2) rendered every tick as an identical "$0.00".
+    const dp = max >= 1 ? 2 : max >= 0.1 ? 3 : 4
+    return `$${v.toFixed(dp)}`
+  }
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`
-  return String(v)
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1).replace(/\.0$/, '')}k`
+  // Token counts are integers; fractional ticks are meaningless.
+  return String(Math.round(v))
 }
 function niceMax(raw: number) {
   if (raw === 0) return 1
   const mag = Math.pow(10, Math.floor(Math.log10(raw)))
-  return Math.ceil(raw / mag) * mag
+  const rounded = Math.ceil(raw / mag) * mag
+  // There are five ticks at quarter steps. Below 8 that leaves fractions, and
+  // rounding them for a token axis produced duplicates (0 1 2 2 3); a multiple
+  // of 4 divides cleanly.
+  return rounded < 8 ? Math.max(4, Math.ceil(rounded / 4) * 4) : rounded
 }
 
 interface Series {
@@ -85,6 +95,8 @@ export interface UsageChartProps {
   projectData?: ProjectTimePoint[]
   metric: Metric
   hours?: number
+  /** Drop the card background/border so a host can supply its own. */
+  bare?: boolean
 }
 
 export default function UsageChart(props: UsageChartProps) {
@@ -166,7 +178,13 @@ export default function UsageChart(props: UsageChartProps) {
         value: byBucket.get(b) ?? 0,
       }))
       const line = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ')
-      const area = `${line} L${(ML + PW).toFixed(1)},${(MT + PH).toFixed(1)} L${ML},${(MT + PH).toFixed(1)} Z`
+      // With one bucket every point sits at x = ML, so the line renders as
+      // nothing and the area becomes a triangle spanning the whole plot —
+      // a fresh install with an hour of data looked like a day of ramping
+      // spend. Draw just the dot instead.
+      const area = n > 1
+        ? `${line} L${(ML + PW).toFixed(1)},${(MT + PH).toFixed(1)} L${ML},${(MT + PH).toFixed(1)} Z`
+        : ''
       return { ...s, coords, line, area }
     })
   })
@@ -174,7 +192,7 @@ export default function UsageChart(props: UsageChartProps) {
   const yTicks = createMemo(() =>
     [0, 0.25, 0.5, 0.75, 1].map((f) => ({
       y: MT + (1 - f) * PH,
-      label: fmtY(f * maxVal(), props.metric),
+      label: fmtY(f * maxVal(), props.metric, maxVal()),
     })),
   )
 
@@ -216,7 +234,12 @@ export default function UsageChart(props: UsageChartProps) {
   const hasData = createMemo(() => allBuckets().length > 0)
 
   return (
-    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+    <div
+      classList={{
+        'rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900':
+          !props.bare,
+      }}
+    >
       <div class="flex items-center justify-between px-4 pt-3 pb-2 flex-wrap gap-2">
         <h3 class="text-sm font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
           {props.metric === 'cost' ? 'Cost' : 'Tokens'} over time
@@ -264,7 +287,7 @@ export default function UsageChart(props: UsageChartProps) {
         <svg
           viewBox={`0 0 ${W} ${H}`}
           class="w-full"
-          onMouseLeave={() => { setHoveredBucket(null); setHoveredSeries(null) }}
+          onPointerLeave={() => { setHoveredBucket(null); setHoveredSeries(null) }}
         >
           {/* Y grid + labels */}
           <For each={yTicks()}>
@@ -295,7 +318,7 @@ export default function UsageChart(props: UsageChartProps) {
             {(sp, si) => (
               <>
                 {/* Area fill only for single-series */}
-                <Show when={!isMulti()}>
+                <Show when={!isMulti() && sp.area !== ''}>
                   <path d={sp.area} fill={sp.color} fill-opacity="0.12" />
                 </Show>
 
@@ -306,7 +329,7 @@ export default function UsageChart(props: UsageChartProps) {
                   stroke-linejoin="round" stroke-linecap="round" />
 
                 {/* Dots */}
-                <For each={showDots() ? sp.coords : sp.coords.filter((c) => c.bucket === hoveredBucket())}>
+                <For each={showDots() || sp.coords.length === 1 ? sp.coords : sp.coords.filter((c) => c.bucket === hoveredBucket())}>
                   {(c) => (
                     <circle cx={c.x} cy={c.y}
                       r={hoveredBucket() === c.bucket && (!isMulti() || hoveredSeries() === si()) ? 5 : 3}
@@ -339,19 +362,23 @@ export default function UsageChart(props: UsageChartProps) {
               return (
                 <rect x={x - colW / 2} y={MT} width={colW} height={PH}
                   fill="transparent"
-                  onMouseEnter={() => setHoveredBucket(b)} />
+                  onPointerEnter={() => { setHoveredBucket(b); setHoveredSeries(null) }} />
               )
             }}
           </For>
 
           {/* Per-series hit rects (only in multi mode, to identify which line) */}
-          <Show when={isMulti() && showDots()}>
+          {/* Invisible per-series targets, so the tooltip names the right line.
+              These used to be gated on showDots(), so above 60 buckets every
+              hover fell through to series 0 and the tooltip confidently
+              labelled it with the highest-spending project. */}
+          <Show when={isMulti()}>
             <For each={seriesPaths()}>
               {(sp, si) => (
                 <For each={sp.coords}>
                   {(c) => (
                     <circle cx={c.x} cy={c.y} r={8} fill="transparent"
-                      onMouseEnter={() => { setHoveredBucket(c.bucket); setHoveredSeries(si()) }} />
+                      onPointerEnter={() => { setHoveredBucket(c.bucket); setHoveredSeries(si()) }} />
                   )}
                 </For>
               )}
