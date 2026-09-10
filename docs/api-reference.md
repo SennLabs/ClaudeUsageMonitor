@@ -85,12 +85,19 @@ Notes:
   `sessions` upsert is skipped.
 - Records with a missing or zero `timeUnixNano` are timestamped with the
   server's current UTC time.
-- The whole body is parsed before any insert, so a record that fails to *parse*
-  discards the entire batch. Records are then written one transaction each, so a
-  failure partway through leaves earlier ones committed — see
-  [known issue 6](known-issues.md#6-batches-are-not-atomic-so-failures-permanently-inflate-totals).
-- There is no de-duplication. If a client retries a batch, its events are
-  counted twice.
+- **The whole batch is one transaction.** It either lands or it doesn't; a
+  failure partway through no longer leaves earlier records committed for the
+  retry to duplicate.
+- **A single unparseable record is dropped, not fatal.** It is logged and
+  counted; every other record in the batch still lands.
+- The write runs off the event loop, so a large batch no longer blocks
+  `/healthz` and the other routes.
+- **Retried batches are de-duplicated.** Each record is stored with an
+  `event_hash` over its identity and full attribute map, behind a unique index,
+  so an exporter resending an identical batch after a 5xx adds nothing. This
+  needs the index to exist — see
+  [Data model](data-model.md#event-de-duplication) if the startup log says
+  de-duplication is inactive.
 
 ---
 
@@ -375,7 +382,8 @@ loop keeps serving), and returns the same body as `/api/backup/status`.
 
 | Status | When |
 | --- | --- |
-| `400` | Manual backup trigger with no destination configured |
+| `400` | Body is not valid JSON, or is not a usable OTLP envelope; manual backup trigger with no destination configured |
+| `413` | `POST /v1/logs` body larger than `MAX_LOG_BODY_BYTES` (default 32 MB) |
 | `401` | Missing or wrong bearer token, when a token is configured |
 | `422` | Request body fails validation (e.g. a non-string `project_name`) |
 | `500` | Unhandled server error — check `docker compose logs ingest` |

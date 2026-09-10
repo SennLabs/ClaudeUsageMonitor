@@ -73,9 +73,11 @@ across anything else — terminate TLS in front (see
 all if it is unset, can flood `POST /v1/logs` and grow the database without
 bound.
 
-**No event de-duplication or authenticity check.** Events are trusted as sent.
-A client can report any session id, model, or cost it likes. This is a usage
-*monitor*, not an audit log — don't bill anyone off it without a second source.
+**No authenticity check.** Events are trusted as sent. A client can report any
+session id, model, or cost it likes. This is a usage *monitor*, not an audit
+log — don't bill anyone off it without a second source. (Retried batches *are*
+de-duplicated as of 2026-09-10, but that guards against accidental
+double-counting, not against a client that lies.)
 
 **`StrictHostKeyChecking=no` in rsync backups.** Unattended backup accepts the
 NAS's host key without verification, which is a LAN-appropriate trade. Across an

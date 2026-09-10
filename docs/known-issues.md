@@ -26,9 +26,9 @@ single-instance internal tool on a private network.
 - [x] [2. A failed API call renders no error at all](#2-a-failed-api-call-renders-no-error-at-all) — *fixed*
 - [x] [3. A failed project-tag save is swallowed silently](#3-a-failed-project-tag-save-is-swallowed-silently) — *fixed*
 - [x] [4. CORS `*` plus the token-injecting proxy makes port 9595 an open API](#4-cors--plus-the-token-injecting-proxy-makes-port-9595-an-open-api) — *fixed*
-- [ ] [5. Ingest blocks its own event loop](#5-ingest-blocks-its-own-event-loop) — *verified*
-- [ ] [6. Batches are not atomic, so failures permanently inflate totals](#6-batches-are-not-atomic-so-failures-permanently-inflate-totals) — *verified*
-- [ ] [7. Malformed OTLP payloads return 500 instead of 400](#7-malformed-otlp-payloads-return-500-instead-of-400) — *reported*
+- [x] [5. Ingest blocks its own event loop](#5-ingest-blocks-its-own-event-loop) — *fixed*
+- [x] [6. Batches are not atomic, so failures permanently inflate totals](#6-batches-are-not-atomic-so-failures-permanently-inflate-totals) — *fixed*
+- [x] [7. Malformed OTLP payloads return 500 instead of 400](#7-malformed-otlp-payloads-return-500-instead-of-400) — *fixed*
 - [ ] [8. Backups fail silently in several ordinary configurations](#8-backups-fail-silently-in-several-ordinary-configurations) — *verified*
 - [ ] [9. Concurrent backups collide on one temp file](#9-concurrent-backups-collide-on-one-temp-file) — *reported*
 - [ ] [31. User-ID mapping breaks on every dev container rebuild](#31-user-id-mapping-breaks-on-every-dev-container-rebuild) — *verified*
@@ -169,7 +169,9 @@ add `proxy_hide_header Access-Control-Allow-Origin;` to the nginx `/api/` block.
 
 ### 5. Ingest blocks its own event loop
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** The whole batch is written in one connection and one transaction via `db.write_events`, dispatched with `asyncio.to_thread`. Measured on a 200-record batch: **1646 ms → 26 ms** wall (122 → 7685 events/s), and the event loop stays responsive throughout — a 1 kHz heartbeat ticked 11 times during the write, against 1 before.
 
 `ingest/app/main.py:69` — `ingest_logs` is `async def` but calls
 `db.upsert_session` and `db.insert_event` synchronously, and `db._connect`
@@ -188,7 +190,9 @@ connection with a single transaction and `executemany`. `_purge_loop`
 
 ### 6. Batches are not atomic, so failures permanently inflate totals
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** One transaction per batch, plus `event_hash` (SHA-256 over the record's identity and full attribute map) behind a unique index with `INSERT OR IGNORE`, so a resent batch is a no-op. Existing duplicates are handled by `ingest/dedupe.py` rather than an automatic destructive migration — see [Data model](data-model.md#event-de-duplication). Regression test `test_duplicate_batches_are_ignored`.
 
 Each record commits in its own transaction. A malformed record mid-batch leaves
 earlier records committed and returns 500:
@@ -206,7 +210,9 @@ a hash of the record) with `INSERT OR IGNORE`. Pairs with item 5.
 
 ### 7. Malformed OTLP payloads return 500 instead of 400
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** The envelope is validated and raises 400; individual records that cannot be parsed are logged, counted and skipped so the rest of the batch still lands. Null-shaped members, non-numeric `intValue`, `timeUnixNano` of the string "0", and structured values in string columns are all handled. Regression tests `test_malformed_envelope_is_a_400` and `test_malformed_records_do_not_lose_the_batch`.
 
 `ingest/app/otlp.py:90` — `.get("resource", {})` defends against missing keys
 but not JSON `null`. All of these 500: `"resource": null`,

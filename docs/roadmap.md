@@ -17,11 +17,11 @@ item — this is a list of options, not a plan of record.
 - [ ] [R1. Move settings server-side](#r1-move-settings-server-side)
 - [ ] [R2. Retention and daily rollups](#r2-retention-and-daily-rollups)
 - [ ] [R3. Surface cache efficiency](#r3-surface-cache-efficiency)
-- [ ] [R4. Event de-duplication](#r4-event-de-duplication)
+- [x] [R4. Event de-duplication](#r4-event-de-duplication) — *done*
 
 **Telemetry coverage — data Claude Code already sends**
 
-- [ ] [R17. Store cost as integer micros](#r17-store-cost-as-integer-micros)
+- [x] [R17. Store cost as integer micros](#r17-store-cost-as-integer-micros) — *done*
 - [ ] [R18. Promote the attributes already being received](#r18-promote-the-attributes-already-being-received)
 - [ ] [R19. Surface errors and refusals](#r19-surface-errors-and-refusals)
 - [ ] [R20. Surface tool performance](#r20-surface-tool-performance)
@@ -142,6 +142,10 @@ broken down by project. Flag projects whose ratio is falling.
 
 ### R4. Event de-duplication
 
+*Status: **done**.*
+
+**Done 2026-09-10.** Implemented with the batch-atomicity fix, as this item anticipated. `event_hash` + a unique index + `INSERT OR IGNORE`; pre-existing duplicates are cleared deliberately with `ingest/dedupe.py`.
+
 **Problem.** No idempotency key on `usage_events`, and OTLP exporters retry on
 5xx by design. Every transient failure permanently inflates cost and token
 totals — see [known issue 6](known-issues.md#6-batches-are-not-atomic-so-failures-permanently-inflate-totals).
@@ -166,6 +170,10 @@ backfill from clients — the data is already in the database and can be recover
 with `json_extract`. Items R24–R27 need a config change or a new endpoint.
 
 ### R17. Store cost as integer micros
+
+*Status: **done**.*
+
+**Done 2026-09-10.** `cost_usd_micros` is read from the event when the client sends it and derived from `cost_usd` otherwise, and is backfilled for existing rows on startup. The read queries still aggregate `cost_usd`; switching them over is part of [R18](#r18-promote-the-attributes-already-being-received).
 
 Every `claude_code.api_request` event carries `cost_usd_micros` (cost in
 millionths, as an integer) alongside the decimal `cost_usd`. The `cost_usd`

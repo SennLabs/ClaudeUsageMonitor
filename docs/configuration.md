@@ -23,6 +23,8 @@ cp .env.example .env
 | `BACKUP_KEEP` | `7` | How many timestamped snapshots to retain. **Local/copy mode only** — remote pruning is not performed. |
 | `BACKUP_SSH_KEY` | *(empty)* | Path *inside the container* to a private key for rsync mode. Mount it in as a read-only volume. |
 | `LOG_LEVEL` | `INFO` | Level for this application's loggers. Backup and purge activity is logged at INFO; third-party loggers stay at WARNING regardless. |
+| `DB_BUSY_TIMEOUT_SECONDS` | `15` | How long a write waits for the SQLite lock before failing. A failure here becomes a 500, which an exporter retries — waiting is better. |
+| `MAX_LOG_BODY_BYTES` | `33554432` (32 MB) | Largest accepted `POST /v1/logs` body. `/v1/logs` is not proxied through nginx, so nginx's own limit never applies to it. |
 
 Backup variables are covered in depth in [Backup and restore](backup-and-restore.md).
 

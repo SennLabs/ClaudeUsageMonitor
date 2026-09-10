@@ -62,14 +62,46 @@ One row per received log record. Append-only — nothing updates or deletes here
 | `cache_read_tokens` | INTEGER | |
 | `cache_creation_tokens` | INTEGER | |
 | `cost_usd` | REAL | As reported by the client |
-| `raw_attributes` | TEXT | JSON of the complete merged attribute map |
+| `cost_usd_micros` | INTEGER | The same figure in exact millionths — aggregate on this, not on the float |
+| `raw_attributes` | TEXT | JSON of the complete merged attribute map, key-sorted |
+| `event_hash` | TEXT | SHA-256 identity digest, unique — see below |
+
+### Event de-duplication
+
+An OpenTelemetry exporter retries a 5xx by resending the identical batch. With
+nothing to recognise the resend, a single transient failure permanently
+inflated cost and token totals.
+
+Every record now carries an `event_hash`: a SHA-256 over its session id,
+timestamp, event name and complete key-sorted attribute map. A `UNIQUE` index
+on that column plus `INSERT OR IGNORE` makes a replayed batch a no-op. Two
+genuinely distinct records would have to be byte-identical *and* share a
+nanosecond timestamp to collide.
+
+The unique index is created from `init_db()` rather than `schema.sql`, on
+purpose. An existing database may already contain duplicates, and `executescript`
+failing over that would stop the service from starting at all. Instead:
+
+- Startup backfills `event_hash` and `cost_usd_micros` for existing rows.
+- It then tries to create the index. If duplicates block it, it logs a warning
+  naming the count and keeps serving — **without** de-duplication.
+- `ingest/dedupe.py` clears them out deliberately. It reports first and deletes
+  nothing without `--apply`, keeping the earliest row of each set:
+
+  ```bash
+  cd ingest && python dedupe.py            # report only
+  cd ingest && python dedupe.py --apply    # delete, after taking a backup
+  ```
+
+- The index is created on the next startup.
 
 ### Indexes
 
 ```sql
-CREATE INDEX idx_usage_events_session ON usage_events(session_id);
-CREATE INDEX idx_usage_events_time    ON usage_events(occurred_at);
-CREATE INDEX idx_sessions_user        ON sessions(user_id);
+CREATE INDEX        idx_usage_events_session ON usage_events(session_id);
+CREATE INDEX        idx_usage_events_time    ON usage_events(occurred_at);
+CREATE INDEX        idx_sessions_user        ON sessions(user_id);
+CREATE UNIQUE INDEX idx_usage_events_hash    ON usage_events(event_hash);  -- from init_db()
 ```
 
 The time index is what keeps the windowed chart queries cheap as the table

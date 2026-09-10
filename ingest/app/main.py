@@ -112,19 +112,36 @@ def _window(hours: int) -> int | None:
     return None if hours <= 0 else min(hours, 720)
 
 
+# Guard against an unbounded body: request.json() buffers the whole thing, and
+# this route is not proxied through nginx, so nginx's client_max_body_size
+# never applies to it.
+MAX_BODY_BYTES = int(os.environ.get("MAX_LOG_BODY_BYTES", str(32 * 1024 * 1024)))
+
+
 @app.post("/v1/logs", dependencies=[Depends(require_auth)])
 async def ingest_logs(request: Request):
-    body = await request.json()
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="Payload too large")
 
-    for event in extract_log_events(body):
-        if event.session_id:
-            db.upsert_session(
-                event.session_id,
-                event.occurred_at,
-                user_id=event.user_id,
-                organization_id=event.organization_id,
-            )
-        db.insert_event(event)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body is not valid JSON")
+
+    try:
+        events, skipped = extract_log_events(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Malformed OTLP payload: {exc}")
+
+    if skipped:
+        log.warning("Dropped %d unparseable record(s) from a batch", skipped)
+
+    # Blocking SQLite, moved off the event loop: a large batch used to stall
+    # every other request, including /healthz, for the duration of the write.
+    inserted, duplicates = await asyncio.to_thread(db.write_events, events)
+    if duplicates:
+        log.info("Ignored %d duplicate event(s) — likely an exporter retry", duplicates)
 
     # OTLP/HTTP success response is an empty ExportLogsServiceResponse body.
     return JSONResponse(content={}, status_code=200)

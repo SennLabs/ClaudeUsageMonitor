@@ -340,6 +340,105 @@ def test_refuses_to_start_without_a_token() -> None:
     print("OK (startup guard) - refuses to start with no token and no explicit opt-in")
 
 
+
+def test_duplicate_batches_are_ignored() -> None:
+    """An exporter retrying a 5xx resends the identical batch; it must not double-count."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        payload = make_payload("retry-1")
+        assert client.post("/v1/logs", json=payload).status_code == 200
+        first = client.get("/api/summary").json()
+        # Same batch again, byte for byte
+        assert client.post("/v1/logs", json=payload).status_code == 200
+        second = client.get("/api/summary").json()
+
+        assert first == second, f"totals changed on replay: {first} -> {second}"
+
+        conn = sqlite3.connect(db_module.DB_PATH)
+        rows = conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0]
+        conn.close()
+        assert rows == 1, f"expected 1 stored event, got {rows}"
+
+        # A genuinely different event still lands
+        assert client.post("/v1/logs", json=make_payload("retry-2")).status_code == 200
+        assert client.get("/api/summary").json()["total_sessions"] == 2
+
+    print("OK (dedupe) - replayed batch stored once, distinct events still stored")
+
+
+def test_malformed_records_do_not_lose_the_batch() -> None:
+    """One unparseable record is dropped; the rest of the batch still commits."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        payload = make_payload("good-1")
+        records = payload["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
+        # A value shape the parser cannot turn into a column
+        records.append({
+            "timeUnixNano": str(int(time.time() * 1_000_000_000)),
+            "body": {"stringValue": "claude_code.api_request"},
+            "attributes": [
+                {"key": "session.id", "value": {"stringValue": "bad-1"}},
+                {"key": "model", "value": {"kvlistValue": {"values": []}}},
+            ],
+        })
+        records.append(make_payload("good-2")["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0])
+
+        resp = client.post("/v1/logs", json=payload)
+        assert resp.status_code == 200, resp.text
+
+        ids = {s["session_id"] for s in client.get("/api/sessions").json()}
+        assert {"good-1", "good-2"} <= ids, ids
+
+    print("OK (partial batch) - good records committed, bad one dropped, no 500")
+
+
+def test_malformed_envelope_is_a_400() -> None:
+    """A structurally invalid body is a client error, not a server error."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        for bad in ([], "nonsense", {"resourceLogs": "not-a-list"}, {}):
+            resp = client.post("/v1/logs", json=bad)
+            assert resp.status_code == 400, f"{bad!r} -> {resp.status_code}"
+
+        # null-shaped members must not 500 either
+        for bad in (
+            {"resourceLogs": [{"resource": None, "scopeLogs": None}]},
+            {"resourceLogs": [{"resource": {"attributes": None}, "scopeLogs": []}]},
+        ):
+            resp = client.post("/v1/logs", json=bad)
+            assert resp.status_code == 200, f"{bad!r} -> {resp.status_code} {resp.text}"
+
+    print("OK (envelope) - malformed bodies return 400, null members tolerated")
+
+
+def test_cost_micros_recorded() -> None:
+    """Integer millionths are stored so SUM() does not accumulate float error."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("micros-1", cost_usd=0.0231))
+        conn = sqlite3.connect(db_module.DB_PATH)
+        micros = conn.execute("SELECT cost_usd_micros FROM usage_events").fetchone()[0]
+        conn.close()
+        assert micros == 23100, micros
+    print("OK (cost micros) - cost_usd_micros derived exactly from the reported figure")
+
+
+def test_oversized_body_rejected() -> None:
+    """A declared body over the cap is refused before it is buffered."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        resp = client.post(
+            "/v1/logs",
+            content=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(main_module.MAX_BODY_BYTES + 1),
+            },
+        )
+        assert resp.status_code == 413, resp.status_code
+    print("OK (body cap) - oversized Content-Length rejected with 413")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -347,6 +446,11 @@ def main() -> None:
     test_user_project_mapping()
     test_purge_empty_sessions()
     test_time_windows()
+    test_duplicate_batches_are_ignored()
+    test_malformed_records_do_not_lose_the_batch()
+    test_malformed_envelope_is_a_400()
+    test_cost_micros_recorded()
+    test_oversized_body_rejected()
     test_no_cors_headers()
     test_docs_endpoints_disabled()
     test_refuses_to_start_without_a_token()  # reloads main_module; keep last

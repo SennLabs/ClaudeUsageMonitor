@@ -1,4 +1,6 @@
+import hashlib
 import json
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -6,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .otlp import LogEvent
+
+log = logging.getLogger(__name__)
 
 # DB_PATH is overridable so a container can point it at a mounted volume
 # (e.g. /data/usage.db) instead of the package directory.
@@ -16,12 +20,20 @@ SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
 # grace period before an empty session is purged (see purge_empty_sessions).
 ACTIVE_WINDOW_MINUTES = int(os.environ.get("ACTIVE_WINDOW_MINUTES", "15"))
 
+# Under WAL all writers serialize. A timeout surfaces as a 500, which an OTLP
+# exporter retries — so wait rather than fail.
+BUSY_TIMEOUT_SECONDS = float(os.environ.get("DB_BUSY_TIMEOUT_SECONDS", "15"))
+
+# SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999 on some builds.
+_MAX_SQL_VARIABLES = 900
+
 
 @contextmanager
 def _connect():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_SECONDS * 1000)}")
     try:
         yield conn
         conn.commit()
@@ -35,14 +47,112 @@ def _connect():
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA_PATH.read_text())
-        # Migrate existing databases that predate schema additions
+        # Migrate existing databases that predate schema additions. Additive
+        # and nullable only; re-running is a no-op.
         for stmt in (
             "ALTER TABLE sessions ADD COLUMN project_name TEXT",
+            "ALTER TABLE usage_events ADD COLUMN cost_usd_micros INTEGER",
+            "ALTER TABLE usage_events ADD COLUMN event_hash TEXT",
         ):
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass  # column already exists
+
+        # Derive the exact integer cost for rows that predate the column.
+        conn.execute(
+            """
+            UPDATE usage_events
+               SET cost_usd_micros = CAST(ROUND(cost_usd * 1000000) AS INTEGER)
+             WHERE cost_usd_micros IS NULL AND cost_usd IS NOT NULL
+            """
+        )
+        _backfill_event_hashes(conn)
+
+    _ensure_dedupe_index()
+
+
+def _backfill_event_hashes(conn: sqlite3.Connection) -> None:
+    """Fill event_hash for rows written before the column existed."""
+    rows = conn.execute(
+        """
+        SELECT id, session_id, occurred_at, event_name, raw_attributes
+          FROM usage_events
+         WHERE event_hash IS NULL
+        """
+    ).fetchall()
+    if not rows:
+        return
+    conn.executemany(
+        "UPDATE usage_events SET event_hash = ? WHERE id = ?",
+        [
+            (
+                _hash_parts(r["session_id"], r["occurred_at"], r["event_name"], r["raw_attributes"]),
+                r["id"],
+            )
+            for r in rows
+        ],
+    )
+    log.info("Backfilled event_hash for %d existing event(s)", len(rows))
+
+
+def _ensure_dedupe_index() -> None:
+    """
+    Create the UNIQUE index that makes INSERT OR IGNORE deduplicate.
+
+    Kept out of schema.sql and out of the migration transaction on purpose: an
+    existing database may already contain duplicates from retried batches, and
+    refusing to start over that would be a worse failure than running without
+    dedupe. Warn, keep serving, and let the operator clean up deliberately with
+    dedupe.py.
+    """
+    with _connect() as conn:
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_hash "
+                "ON usage_events(event_hash)"
+            )
+        except sqlite3.IntegrityError:
+            duplicates = conn.execute(
+                """
+                SELECT COALESCE(SUM(n - 1), 0) AS extra FROM (
+                    SELECT COUNT(*) AS n FROM usage_events
+                     WHERE event_hash IS NOT NULL
+                     GROUP BY event_hash HAVING n > 1
+                )
+                """
+            ).fetchone()["extra"]
+            log.warning(
+                "Event de-duplication is INACTIVE: %d duplicate event row(s) already "
+                "exist, so the unique index could not be created. Retried batches will "
+                "keep inflating totals until this is resolved. Review and clean up with "
+                "`python dedupe.py` (it reports before it deletes, and takes --apply).",
+                duplicates,
+            )
+
+
+def _hash_parts(session_id, occurred_at, event_name, raw_attributes) -> str:
+    """
+    Identity of one telemetry record.
+
+    Includes the full attribute map, so any difference at all between two
+    records makes them distinct. A retried export resends byte-identical
+    records, which is exactly what this catches.
+    """
+    payload = "\x1f".join(
+        "" if part is None else str(part)
+        for part in (session_id, occurred_at, event_name, raw_attributes)
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def event_hash(event: LogEvent) -> str:
+    return _hash_parts(
+        event.session_id,
+        event.occurred_at,
+        event.event_name,
+        json.dumps(event.raw_attributes, sort_keys=True),
+    )
 
 
 def _cutoff(minutes: int) -> str:
@@ -66,29 +176,97 @@ def _now_iso() -> str:
 
 # ── Writes ─────────────────────────────────────────────────────────────────
 
-def upsert_session(
-    session_id: str,
-    occurred_at: str,
-    user_id: str | None,
-    organization_id: str | None,
-) -> None:
+def write_events(events: list[LogEvent]) -> tuple[int, int]:
+    """
+    Write a whole batch in ONE connection and ONE transaction.
+
+    Returns (inserted, duplicates_ignored).
+
+    Previously each record opened its own connection, set WAL, committed and
+    closed — two connect/commit/close cycles per record, on the event loop
+    thread. A 200-record batch cost ~1.65s of event-loop starvation, during
+    which /healthz went unanswered and the container healthcheck could restart
+    the process mid-write.
+
+    One transaction also makes the batch atomic: a failure partway through no
+    longer leaves earlier records committed for the exporter's retry to
+    duplicate.
+    """
+    if not events:
+        return (0, 0)
+
+    # Collapse per-session updates so an out-of-order batch cannot move
+    # last_seen_at backwards, and first_seen_at reflects the earliest record.
+    sessions: dict[str, dict] = {}
+    for event in events:
+        if not event.session_id:
+            continue
+        current = sessions.get(event.session_id)
+        if current is None:
+            sessions[event.session_id] = {
+                "first": event.occurred_at,
+                "last": event.occurred_at,
+                "user_id": event.user_id,
+                "organization_id": event.organization_id,
+            }
+        else:
+            current["first"] = min(current["first"], event.occurred_at)
+            current["last"] = max(current["last"], event.occurred_at)
+            current["user_id"] = current["user_id"] or event.user_id
+            current["organization_id"] = current["organization_id"] or event.organization_id
+
     with _connect() as conn:
-        conn.execute(
+        conn.executemany(
             """
             INSERT INTO sessions (
                 session_id, user_id, organization_id, first_seen_at, last_seen_at, project_name
             )
             VALUES (?, ?, ?, ?, ?, (SELECT project_name FROM user_projects WHERE user_id = ?))
             ON CONFLICT(session_id) DO UPDATE SET
-                last_seen_at = excluded.last_seen_at,
+                last_seen_at = MAX(sessions.last_seen_at, excluded.last_seen_at),
+                first_seen_at = MIN(sessions.first_seen_at, excluded.first_seen_at),
                 user_id = COALESCE(sessions.user_id, excluded.user_id),
                 organization_id = COALESCE(sessions.organization_id, excluded.organization_id),
                 -- Picks up a user->project mapping created after the session started,
                 -- without ever overwriting a label set by hand on this session.
                 project_name = COALESCE(sessions.project_name, excluded.project_name)
             """,
-            (session_id, user_id, organization_id, occurred_at, occurred_at, user_id),
+            [
+                (sid, s["user_id"], s["organization_id"], s["first"], s["last"], s["user_id"])
+                for sid, s in sessions.items()
+            ],
         )
+
+        before = conn.total_changes
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO usage_events (
+                session_id, occurred_at, event_name, model,
+                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                cost_usd, cost_usd_micros, raw_attributes, event_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    event.session_id,
+                    event.occurred_at,
+                    event.event_name,
+                    event.model,
+                    event.input_tokens,
+                    event.output_tokens,
+                    event.cache_read_tokens,
+                    event.cache_creation_tokens,
+                    event.cost_usd,
+                    event.cost_usd_micros,
+                    json.dumps(event.raw_attributes, sort_keys=True),
+                    event_hash(event),
+                )
+                for event in events
+            ],
+        )
+        inserted = conn.total_changes - before
+
+    return (inserted, len(events) - inserted)
 
 
 def update_session_project(session_id: str, project_name: str | None) -> None:
@@ -96,31 +274,6 @@ def update_session_project(session_id: str, project_name: str | None) -> None:
         conn.execute(
             "UPDATE sessions SET project_name = ? WHERE session_id = ?",
             (project_name, session_id),
-        )
-
-
-def insert_event(event: LogEvent) -> None:
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO usage_events (
-                session_id, occurred_at, event_name, model,
-                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                cost_usd, raw_attributes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event.session_id,
-                event.occurred_at,
-                event.event_name,
-                event.model,
-                event.input_tokens,
-                event.output_tokens,
-                event.cache_read_tokens,
-                event.cache_creation_tokens,
-                event.cost_usd,
-                json.dumps(event.raw_attributes),
-            ),
         )
 
 
@@ -153,9 +306,13 @@ def purge_empty_sessions(minutes: int | None = None) -> int:
         ids = [row["session_id"] for row in conn.execute(_EMPTY_SESSION_IDS, (cutoff,)).fetchall()]
         if not ids:
             return 0
-        marks = ",".join("?" * len(ids))
-        conn.execute(f"DELETE FROM usage_events WHERE session_id IN ({marks})", ids)
-        conn.execute(f"DELETE FROM sessions WHERE session_id IN ({marks})", ids)
+        # Chunked: a single IN (...) list can exceed SQLite's variable limit
+        # after a long outage leaves a backlog of short-lived containers.
+        for start in range(0, len(ids), _MAX_SQL_VARIABLES):
+            chunk = ids[start : start + _MAX_SQL_VARIABLES]
+            marks = ",".join("?" * len(chunk))
+            conn.execute(f"DELETE FROM usage_events WHERE session_id IN ({marks})", chunk)
+            conn.execute(f"DELETE FROM sessions WHERE session_id IN ({marks})", chunk)
         return len(ids)
 
 

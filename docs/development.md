@@ -13,6 +13,7 @@
 │   ├── requirements-dev.txt  Adds httpx for the smoke test
 │   ├── schema.sql            Tables and indexes
 │   ├── test_ingest.py        End-to-end smoke test
+│   ├── dedupe.py             One-off cleanup of pre-existing retry duplicates
 │   └── app/
 │       ├── main.py           Routes, auth, CORS, lifespan
 │       ├── otlp.py           OTLP JSON → LogEvent (pure, no I/O)

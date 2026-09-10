@@ -209,6 +209,22 @@ environment variable and recreate the ingest container.
 
 ---
 
+## Startup says "Event de-duplication is INACTIVE"
+
+The unique index on `event_hash` could not be created because the database
+already contains duplicate events from retried batches, predating the fix.
+Ingestion continues normally — new duplicates just are not caught yet.
+
+```bash
+cd ingest && python dedupe.py          # report: how many, and how much cost
+cd ingest && python dedupe.py --apply  # remove them (back up first)
+```
+
+Restart ingest afterwards and the index is created. See
+[Data model → Event de-duplication](data-model.md#event-de-duplication).
+
+---
+
 ## Sessions are disappearing from the table
 
 Expected, if they never logged any usage. A session that goes quiet past the

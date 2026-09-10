@@ -19,7 +19,15 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cache_read_tokens      INTEGER,
     cache_creation_tokens  INTEGER,
     cost_usd               REAL,
-    raw_attributes         TEXT
+    cost_usd_micros        INTEGER,
+    raw_attributes         TEXT,
+    -- Stable digest of the record's identity. An OTLP exporter retries a 5xx
+    -- by resending the identical batch, so without this a transient failure
+    -- permanently double-counts cost and tokens. The UNIQUE index that backs
+    -- INSERT OR IGNORE is created from init_db(), not here — an existing
+    -- database may already contain duplicates, and failing startup over that
+    -- would be worse than running without dedupe.
+    event_hash             TEXT
 );
 
 -- Standing user.id -> project mapping. Dev containers report a stable user.id,
