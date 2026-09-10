@@ -1,14 +1,8 @@
-import { createResource, createSignal, For, onMount, Show } from 'solid-js'
-import { fetchBackupStatus, fetchUsageByModel, triggerBackup } from '../api'
-import type { BackupStatus } from '../api'
-import {
-  type AppSettings,
-  type Metric,
-  type ModelPrice,
-  type TimeWindow,
-  loadSettings,
-  saveSettings,
-} from '../settings'
+import { createEffect, createResource, createSignal, Show } from 'solid-js'
+import { fetchBackupStatus, saveSettings, triggerBackup } from '../api'
+import type { AppSettings, BackupStatus, Metric, TimeWindow } from '../api'
+import { errorMessage } from '../resource'
+import { mutateSettings, settings, settingsResource } from '../settingsStore'
 
 function Section(props: { title: string; description?: string; children: any }) {
   return (
@@ -66,7 +60,6 @@ const inputClass =
   'rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
 
 export default function SettingsPage() {
-  const [usageByModel] = createResource(fetchUsageByModel)
   const [backupStatus, { refetch: refetchBackup }] = createResource(fetchBackupStatus)
   const [triggerError, setTriggerError] = createSignal<string | null>(null)
   const [triggering, setTriggering] = createSignal(false)
@@ -86,76 +79,54 @@ export default function SettingsPage() {
   }
 
   // ── form state ─────────────────────────────────────────────────────────
+  // Seeded from the server once settings load, then owned by the form until
+  // saved. activeSessionWindowMin is not here: it is operator configuration
+  // (it also governs when unused sessions are deleted), so it is shown but
+  // not editable.
   const [monthlyBudget, setMonthlyBudget] = createSignal('')
   const [billingDay, setBillingDay] = createSignal(1)
   const [refreshMs, setRefreshMs] = createSignal(5000)
-  const [activeWindowMin, setActiveWindowMin] = createSignal(15)
   const [defaultTimeWindow, setDefaultTimeWindow] = createSignal<TimeWindow>('24h')
   const [defaultMetric, setDefaultMetric] = createSignal<Metric>('cost')
   const [alertThreshold, setAlertThreshold] = createSignal('')
-  const [modelPrices, setModelPrices] = createSignal<Record<string, ModelPrice>>({})
-  const [newModelName, setNewModelName] = createSignal('')
+  const [seeded, setSeeded] = createSignal(false)
+  const [saveError, setSaveError] = createSignal<string | null>(null)
 
-  onMount(() => {
-    const s = loadSettings()
+  createEffect(() => {
+    if (seeded() || settingsResource.error || settingsResource.state !== 'ready') return
+    const s = settings()
     setMonthlyBudget(s.monthlyBudget !== null ? String(s.monthlyBudget) : '')
     setBillingDay(s.billingCycleDay)
     setRefreshMs(s.refreshIntervalMs)
-    setActiveWindowMin(s.activeSessionWindowMin)
     setDefaultTimeWindow(s.defaultTimeWindow)
     setDefaultMetric(s.defaultMetric)
     setAlertThreshold(
       s.costAlertThresholdPerHour !== null ? String(s.costAlertThresholdPerHour) : '',
     )
-    setModelPrices({ ...s.modelPrices })
+    setSeeded(true)
   })
 
-  function handleSave() {
+  async function handleSave() {
     const budget = parseFloat(monthlyBudget())
     const alert = parseFloat(alertThreshold())
-    const settings: AppSettings = {
+    const patch: Partial<AppSettings> = {
       monthlyBudget: !isNaN(budget) && budget > 0 ? budget : null,
       billingCycleDay: billingDay(),
       refreshIntervalMs: refreshMs(),
-      activeSessionWindowMin: activeWindowMin(),
       defaultTimeWindow: defaultTimeWindow(),
       defaultMetric: defaultMetric(),
       costAlertThresholdPerHour: !isNaN(alert) && alert > 0 ? alert : null,
-      modelPrices: modelPrices(),
     }
-    saveSettings(settings)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
-  }
-
-  function setPrice(model: string, field: keyof ModelPrice, raw: string) {
-    const v = parseFloat(raw)
-    if (isNaN(v)) return
-    setModelPrices((prev) => ({
-      ...prev,
-      [model]: { ...(prev[model] ?? { input_per_mtok: 0, output_per_mtok: 0 }), [field]: v },
-    }))
-  }
-
-  function addModel() {
-    const name = newModelName().trim()
-    if (!name || modelPrices()[name]) return
-    setModelPrices((prev) => ({ ...prev, [name]: { input_per_mtok: 0, output_per_mtok: 0 } }))
-    setNewModelName('')
-  }
-
-  function removeModel(model: string) {
-    setModelPrices((prev) => {
-      const next = { ...prev }
-      delete next[model]
-      return next
-    })
-  }
-
-  const allModels = () => {
-    const fromUsage = (usageByModel() ?? []).map((m) => m.model)
-    const fromOverrides = Object.keys(modelPrices())
-    return [...new Set([...fromUsage, ...fromOverrides])].sort()
+    setSaveError(null)
+    try {
+      // Push the server's response straight into the shared resource so every
+      // open view picks it up without waiting for its next poll.
+      mutateSettings(await saveSettings(patch))
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setSaveError(errorMessage(e))
+    }
   }
 
   return (
@@ -284,116 +255,23 @@ export default function SettingsPage() {
 
           <Field
             label="Active session window"
-            hint="A session is considered active if it had activity within this window."
+            hint="Set by the operator with ACTIVE_WINDOW_MINUTES. Read-only here because it also decides when a session that never logged usage is deleted — see docs/data-model.md."
           >
             <div class="flex items-center gap-1">
-              <input
-                class={`w-20 ${inputClass}`}
-                type="number"
-                min="1"
-                max="120"
-                value={activeWindowMin()}
-                onInput={(e) => setActiveWindowMin(parseInt(e.currentTarget.value) || 15)}
-              />
-              <span class="text-sm text-slate-500">min</span>
+              <span class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+                {settings().activeSessionWindowMin} min
+              </span>
             </div>
           </Field>
         </Section>
 
-        {/* ── Model price overrides ──────────────────────────── */}
-        <Section
-          title="Model Price Overrides"
-          description="Override the cost_usd reported by Claude Code with your own prices. Useful if you're on a custom pricing tier or enterprise agreement. Prices are in USD per 1 million tokens."
-        >
-          <Show when={allModels().length > 0}>
-            <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-              <table class="min-w-full text-sm">
-                <thead class="bg-slate-50 dark:bg-slate-800">
-                  <tr>
-                    <th class="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400">
-                      Model
-                    </th>
-                    <th class="px-3 py-2 text-right font-medium text-slate-500 dark:text-slate-400">
-                      Input ($/MTok)
-                    </th>
-                    <th class="px-3 py-2 text-right font-medium text-slate-500 dark:text-slate-400">
-                      Output ($/MTok)
-                    </th>
-                    <th class="px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
-                  <For each={allModels()}>
-                    {(model) => (
-                      <tr>
-                        <td class="px-3 py-2 font-mono text-xs text-slate-700 dark:text-slate-300">
-                          {model}
-                        </td>
-                        <td class="px-3 py-2 text-right">
-                          <input
-                            class={`w-24 text-right ${inputClass}`}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            placeholder="—"
-                            value={modelPrices()[model]?.input_per_mtok ?? ''}
-                            onInput={(e) => setPrice(model, 'input_per_mtok', e.currentTarget.value)}
-                          />
-                        </td>
-                        <td class="px-3 py-2 text-right">
-                          <input
-                            class={`w-24 text-right ${inputClass}`}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            placeholder="—"
-                            value={modelPrices()[model]?.output_per_mtok ?? ''}
-                            onInput={(e) =>
-                              setPrice(model, 'output_per_mtok', e.currentTarget.value)
-                            }
-                          />
-                        </td>
-                        <td class="px-3 py-2 text-right">
-                          <Show when={modelPrices()[model]}>
-                            <button
-                              type="button"
-                              onClick={() => removeModel(model)}
-                              class="text-xs text-slate-400 hover:text-red-500 transition"
-                            >
-                              ✕
-                            </button>
-                          </Show>
-                        </td>
-                      </tr>
-                    )}
-                  </For>
-                </tbody>
-              </table>
+        <Show when={saveError()}>
+          {(msg) => (
+            <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+              Couldn't save settings: {msg()}
             </div>
-          </Show>
-
-          <div class="flex items-center gap-2">
-            <input
-              class={`flex-1 ${inputClass}`}
-              placeholder="Add model (e.g. claude-opus-4-8)"
-              value={newModelName()}
-              onInput={(e) => setNewModelName(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addModel()}
-            />
-            <button
-              type="button"
-              onClick={addModel}
-              class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 transition"
-            >
-              Add
-            </button>
-          </div>
-
-          <p class="text-xs text-slate-400 dark:text-slate-600">
-            When a price override exists for a model, the Model Breakdown table shows an adjusted
-            cost column alongside the reported cost.
-          </p>
-        </Section>
+          )}
+        </Show>
 
         {/* ── Backup ─────────────────────────────────────────── */}
         <BackupSection
@@ -435,7 +313,9 @@ export default function SettingsPage() {
             Save settings
           </button>
           <Show when={saved()}>
-            <span class="text-sm text-emerald-600 dark:text-emerald-400">Saved ✓</span>
+            <span class="text-sm text-emerald-600 dark:text-emerald-400">
+              Saved ✓ — applies to every view, including the tablet
+            </span>
           </Show>
         </div>
       </main>

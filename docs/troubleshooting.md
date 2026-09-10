@@ -295,10 +295,15 @@ received. Mismatches usually come from client-side pricing assumptions, an
 unrecognized model, or double-counted retried batches (there is no
 de-duplication).
 
-Set per-model overrides at `/settings` → **Model prices** to recompute display
-cost from raw token counts. That changes presentation only; stored values are
-never rewritten. This is a monitoring tool, not a billing system — reconcile
-against the real invoice.
+There is no way to reconcile automatically: Anthropic's authoritative figures
+are behind the Admin API, which needs an admin key this deployment does not
+have (see [Roadmap → Out of scope](roadmap.md#out-of-scope)). Treat `cost_usd`
+as an estimate and reconcile against the real invoice by hand.
+
+Per-model price overrides used to be offered here. They were removed on
+2026-09-10 — they had never actually been wired to any displayed figure, and
+with nothing to validate a hand-entered price against they would have reduced
+accuracy rather than improved it.
 
 ---
 

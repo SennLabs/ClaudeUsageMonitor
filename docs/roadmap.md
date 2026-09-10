@@ -14,7 +14,7 @@ item — this is a list of options, not a plan of record.
 **High value**
 
 - [x] [R0. Attribute projects with `OTEL_RESOURCE_ATTRIBUTES` instead of mapping user IDs](#r0-attribute-projects-with-otel_resource_attributes-instead-of-mapping-user-ids) — *done*
-- [ ] [R1. Move settings server-side](#r1-move-settings-server-side)
+- [x] [R1. Move settings server-side](#r1-move-settings-server-side) — *done*
 - [ ] [R2. Retention and daily rollups](#r2-retention-and-daily-rollups)
 - [ ] [R3. Surface cache efficiency](#r3-surface-cache-efficiency)
 - [x] [R4. Event de-duplication](#r4-event-de-duplication) — *done*
@@ -93,6 +93,10 @@ and as the way to fix historical data — but it stops being the documented defa
 container, which is also [R15](#r15-ship-an-example-client-configuration).
 
 ### R1. Move settings server-side
+
+*Status: **done**.*
+
+**Done 2026-09-10.** `app_settings` table, `GET`/`PUT /api/settings`, and one shared Solid resource (`settingsStore.ts`) so a save reaches every open view without a reload. Theme stays per-device. This also collapsed the three competing active-session windows onto one server value ([known issue 12](known-issues.md#12-three-different-active-session-windows)).
 
 **Problem.** Every preference lives in one browser's `localStorage` under
 `claudeMonitorSettings`. The wall tablet and your laptop hold different values,

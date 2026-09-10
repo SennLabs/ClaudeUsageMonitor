@@ -84,48 +84,34 @@ Two more mounts are commented out in `docker-compose.yml`, for backup use:
 # - /mnt/nas/claude-backups:/backups                            # local NAS mount
 ```
 
-## Dashboard preferences (client-side)
+## Dashboard preferences
 
-These are *not* environment variables. They are per-browser settings, stored in
-`localStorage` under the key `claudeMonitorSettings`, edited at `/settings`, and
-defined in [`dashboard/src/settings.ts`](../dashboard/src/settings.ts).
+Stored **on the server** in the `app_settings` table, edited at `/settings`, and
+served by `GET /api/settings`. They are instance-wide: the wall tablet and your
+laptop see the same values, and a save is picked up by every open view without
+a reload.
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `monthlyBudget` | `null` | Enables the budget progress bar on the tablet view |
-| `billingCycleDay` | `1` | Day of month (1–28) the budget resets |
-| `refreshIntervalMs` | `5000` | How often every view refetches the API |
-| `activeSessionWindowMin` | `15` | Minutes before a session counts as inactive **in the tablet view's own calculation** |
+| `monthlyBudget` | `null` | Enables the budget bar on the tablet view |
+| `billingCycleDay` | `1` | Day of month (1–28) the budget period resets |
+| `refreshIntervalMs` | `5000` | How often every view refetches |
 | `defaultTimeWindow` | `'24h'` | Chart window on first load (`24h` / `7d` / `30d` / `all`) |
 | `defaultMetric` | `'cost'` | Chart metric on first load (`cost` / `tokens`) |
-| `costAlertThresholdPerHour` | `null` | Shows a warning banner when the hourly spend rate exceeds this |
-| `modelPrices` | `{}` | Per-model `$/Mtok` overrides used to recompute cost instead of trusting the reported figure |
+| `costAlertThresholdPerHour` | `null` | Warning banner when the hourly spend rate exceeds this |
 
-Two consequences worth knowing:
+Values are validated on write; an out-of-range one returns `400` rather than
+being silently stored. A partial `PUT` merges, so a newer dashboard talking to
+an older server degrades instead of failing.
 
-- **They do not sync.** Each browser has its own copy. Configuring the wall
-  tablet does not configure your laptop.
-- **`activeSessionWindowMin` is not universal.** The `active_sessions` number in
-  `/api/summary` and `/api/users` is computed server-side from
-  `ACTIVE_WINDOW_MINUTES`. The browser setting only affects the tablet view's own
-  per-session active/idle marking. Keep the two in agreement, and note the server
-  value is also what decides when an unused session gets
-  [purged](data-model.md#empty-session-cleanup) — set the browser window longer
-  than the server one and the tablet can show a session as active moments before
-  it is deleted.
+**Read-only, and shown as such:** `activeSessionWindowMin` comes from the
+`ACTIVE_WINDOW_MINUTES` environment variable. It is not editable from the
+browser because it also decides when a session that never logged usage is
+[purged](data-model.md#empty-session-cleanup) — deleting data is operator
+configuration, not a display preference.
 
-Theme is stored separately, under the `theme` key, and defaults to dark.
-
-## Model price overrides
-
-By default the dashboard displays the `cost_usd` Claude Code reports for each
-event. If your pricing differs — a negotiated rate, or a model the client prices
-incorrectly — add an override at `/settings` under **Model prices**, giving
-input and output dollars per million tokens. `adjustedCost()` then recomputes
-from raw token counts for that model only; models without an override keep the
-reported figure.
-
-Overrides are display-time only. The database always keeps what was reported.
+**Still per-device:** theme, under the `theme` key in `localStorage`. A wall
+display and a laptop reasonably differ, and it defaults to dark.
 
 ## Related
 

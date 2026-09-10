@@ -3,11 +3,12 @@ import type { SessionRow } from '../api'
 import { updateSessionProject } from '../api'
 import { formatCost, formatNumber, formatTime } from '../format'
 import { errorMessage } from '../resource'
+import { settings } from '../settingsStore'
 
-const ACTIVE_WINDOW_MS = 15 * 60 * 1000
-
+// One source of truth, from the server. This used to hardcode 15 minutes,
+// so the same session could show active here and inactive on /tablet.
 function isActive(lastSeenAt: string): boolean {
-  return Date.now() - new Date(lastSeenAt).getTime() < ACTIVE_WINDOW_MS
+  return Date.now() - new Date(lastSeenAt).getTime() < settings().activeSessionWindowMin * 60_000
 }
 
 // ── Grouped-by-project aggregation ────────────────────────────────────────

@@ -117,6 +117,47 @@ export async function setUserProject(
   return res.json() as Promise<UserProjectResult>
 }
 
+// ── Settings ───────────────────────────────────────────────────────────────
+
+export type TimeWindow = '24h' | '7d' | '30d' | 'all'
+export type Metric = 'cost' | 'tokens'
+
+export interface AppSettings {
+  monthlyBudget: number | null
+  billingCycleDay: number
+  refreshIntervalMs: number
+  defaultTimeWindow: TimeWindow
+  defaultMetric: Metric
+  costAlertThresholdPerHour: number | null
+  /** Read-only: set by the operator via ACTIVE_WINDOW_MINUTES. */
+  activeSessionWindowMin: number
+}
+
+export const fetchSettings = () => getJSON<AppSettings>('/settings')
+
+/** Merge a partial update. Returns the full settings as stored. */
+export async function saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const res = await fetch(`${BASE}/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+  }
+  return res.json() as Promise<AppSettings>
+}
+
+export interface BudgetUsage {
+  cycle_start: string
+  cost_usd: number
+  total_tokens: number
+}
+
+/** Spend since the start of the current billing period. */
+export const fetchBudget = () => getJSON<BudgetUsage>('/budget')
+
 export interface BackupStatus {
   enabled: boolean
   destination: string | null

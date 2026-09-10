@@ -345,6 +345,64 @@ Removes the mapping. Existing session labels are left in place unless you pass
 
 ---
 
+## `GET /api/settings`
+
+Dashboard preferences, stored server-side so every viewer shares them.
+
+```json
+{
+  "monthlyBudget": 300.0,
+  "billingCycleDay": 15,
+  "refreshIntervalMs": 5000,
+  "defaultTimeWindow": "24h",
+  "defaultMetric": "tokens",
+  "costAlertThresholdPerHour": null,
+  "activeSessionWindowMin": 15
+}
+```
+
+`activeSessionWindowMin` is read-only — it comes from `ACTIVE_WINDOW_MINUTES`
+and is included so the UI has one source of truth for it. See
+[Configuration](configuration.md#dashboard-preferences).
+
+---
+
+## `PUT /api/settings`
+
+Merges a partial update and returns the full settings as stored.
+
+```bash
+curl -X PUT http://localhost:9585/api/settings \
+  -H "Authorization: Bearer $INGEST_AUTH_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"monthlyBudget": 300, "billingCycleDay": 15}'
+```
+
+- Unknown and read-only keys are **ignored, not rejected**, so a newer
+  dashboard talking to an older server degrades rather than failing.
+- Invalid values return `400` with a message: `billingCycleDay` outside 1–28,
+  `refreshIntervalMs` below 1000, a negative budget, an unrecognised window or
+  metric.
+
+---
+
+## `GET /api/budget`
+
+Spend since the start of the current billing period.
+
+| Query param | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `cycle_day` | int | the stored `billingCycleDay` | Day of month the period starts, 1–28 |
+
+```json
+{"cycle_start": "2026-08-15T00:00:00+00:00", "cost_usd": 42.18, "total_tokens": 1904322}
+```
+
+The period start is computed in UTC and walks back a month when today is before
+the cycle day.
+
+---
+
 ## `GET /api/backup/status`
 
 ```json

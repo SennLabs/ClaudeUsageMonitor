@@ -472,6 +472,131 @@ def fetch_project_names() -> list[str]:
         return [row["project_name"] for row in rows]
 
 
+
+# ── Dashboard settings ─────────────────────────────────────────────────────
+
+# The server owns these now. They used to live in each browser's localStorage,
+# so the wall tablet and a laptop held different values and nothing server-side
+# could act on them. Theme stays per-device — a wall display and a laptop
+# reasonably differ there.
+DEFAULT_SETTINGS: dict = {
+    "monthlyBudget": None,            # USD, null disables the budget bar
+    "billingCycleDay": 1,             # 1-28, day of month the budget resets
+    "refreshIntervalMs": 5000,        # how often views refetch
+    "defaultTimeWindow": "24h",       # 24h | 7d | 30d | all
+    "defaultMetric": "cost",          # cost | tokens
+    "costAlertThresholdPerHour": None,  # USD/hr, null disables the banner
+}
+
+_TIME_WINDOWS = {"24h", "7d", "30d", "all"}
+_METRICS = {"cost", "tokens"}
+
+
+def _coerce_setting(key: str, value):
+    """Validate one setting, returning the value to store. Raises ValueError."""
+    if key in ("monthlyBudget", "costAlertThresholdPerHour"):
+        if value is None:
+            return None
+        value = float(value)
+        if value < 0:
+            raise ValueError(f"{key} must not be negative")
+        return value
+    if key == "billingCycleDay":
+        value = int(value)
+        # Capped at 28 so the day exists in every month.
+        if not 1 <= value <= 28:
+            raise ValueError("billingCycleDay must be between 1 and 28")
+        return value
+    if key == "refreshIntervalMs":
+        value = int(value)
+        if value < 1000:
+            raise ValueError("refreshIntervalMs must be at least 1000")
+        return value
+    if key == "defaultTimeWindow":
+        if value not in _TIME_WINDOWS:
+            raise ValueError(f"defaultTimeWindow must be one of {sorted(_TIME_WINDOWS)}")
+        return value
+    if key == "defaultMetric":
+        if value not in _METRICS:
+            raise ValueError(f"defaultMetric must be one of {sorted(_METRICS)}")
+        return value
+    raise ValueError(f"unknown setting {key!r}")
+
+
+def fetch_settings() -> dict:
+    """Stored settings merged over the defaults, plus server-owned read-only values."""
+    with _connect() as conn:
+        row = conn.execute("SELECT data FROM app_settings WHERE id = 1").fetchone()
+    stored = {}
+    if row:
+        try:
+            stored = json.loads(row["data"])
+        except (TypeError, ValueError):
+            log.warning("Stored settings are not valid JSON; falling back to defaults")
+    merged = {**DEFAULT_SETTINGS, **{k: v for k, v in stored.items() if k in DEFAULT_SETTINGS}}
+    # Read-only: set by the operator, and it also governs when unused sessions
+    # are deleted, so it is not something a browser should be able to change.
+    merged["activeSessionWindowMin"] = ACTIVE_WINDOW_MINUTES
+    return merged
+
+
+def update_settings(patch: dict) -> dict:
+    """Merge a partial update into the stored settings. Raises ValueError."""
+    clean = {}
+    for key, value in patch.items():
+        if key not in DEFAULT_SETTINGS:
+            continue  # ignore read-only and unknown keys rather than erroring
+        clean[key] = _coerce_setting(key, value)
+
+    with _connect() as conn:
+        row = conn.execute("SELECT data FROM app_settings WHERE id = 1").fetchone()
+        current = {}
+        if row:
+            try:
+                current = json.loads(row["data"])
+            except (TypeError, ValueError):
+                current = {}
+        current.update(clean)
+        conn.execute(
+            "INSERT INTO app_settings (id, data) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+            (json.dumps(current),),
+        )
+    return fetch_settings()
+
+
+def cycle_start(cycle_day: int, now: datetime | None = None) -> datetime:
+    """
+    Start of the billing period containing `now`, in UTC.
+
+    If today is before the cycle day, the period started last month.
+    """
+    now = now or datetime.now(timezone.utc)
+    day = max(1, min(28, cycle_day))
+    start = now.replace(day=day, hour=0, minute=0, second=0, microsecond=0)
+    if start > now:
+        month, year = (start.month - 1, start.year) if start.month > 1 else (12, start.year - 1)
+        start = start.replace(year=year, month=month)
+    return start
+
+
+def fetch_budget_usage(cycle_day: int) -> dict:
+    """Spend since the start of the current billing period."""
+    start = cycle_start(cycle_day)
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0)                AS cost_usd,
+                   COALESCE(SUM(COALESCE(input_tokens, 0)
+                              + COALESCE(output_tokens, 0)), 0) AS total_tokens
+              FROM usage_events
+             WHERE occurred_at >= ?
+            """,
+            (start.isoformat(),),
+        ).fetchone()
+    return {"cycle_start": start.isoformat(), **dict(row)}
+
+
 # ── Reads ──────────────────────────────────────────────────────────────────
 
 def fetch_summary(active_within_minutes: int | None = None) -> dict:

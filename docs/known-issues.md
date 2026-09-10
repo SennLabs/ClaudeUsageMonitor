@@ -22,7 +22,7 @@ single-instance internal tool on a private network.
 
 **P1 — fix first**
 
-- [ ] [1. Model price overrides and the budget cycle are dead code](#1-model-price-overrides-and-the-budget-cycle-are-dead-code) — *verified*
+- [x] [1. Model price overrides and the budget cycle are dead code](#1-model-price-overrides-and-the-budget-cycle-are-dead-code) — *fixed*
 - [x] [2. A failed API call renders no error at all](#2-a-failed-api-call-renders-no-error-at-all) — *fixed*
 - [x] [3. A failed project-tag save is swallowed silently](#3-a-failed-project-tag-save-is-swallowed-silently) — *fixed*
 - [x] [4. CORS `*` plus the token-injecting proxy makes port 9595 an open API](#4-cors--plus-the-token-injecting-proxy-makes-port-9595-an-open-api) — *fixed*
@@ -37,7 +37,7 @@ single-instance internal tool on a private network.
 
 - [x] [10. `log.info` is never emitted](#10-loginfo-is-never-emitted) — *fixed*
 - [x] [11. `ACTIVE_WINDOW_MINUTES` is not passed through Compose](#11-active_window_minutes-is-not-passed-through-compose) — *fixed*
-- [ ] [12. Three different "active session" windows](#12-three-different-active-session-windows) — *verified*
+- [x] [12. Three different "active session" windows](#12-three-different-active-session-windows) — *fixed*
 - [ ] [13. Events with no `session.id` inflate the headline only](#13-events-with-no-sessionid-inflate-the-headline-only) — *verified*
 - [ ] [14. `computeHourlyRate` is a sawtooth, not a rate](#14-computehourlyrate-is-a-sawtooth-not-a-rate) — *reported*
 - [ ] [15. Polling destroys an in-progress inline edit](#15-polling-destroys-an-in-progress-inline-edit) — *reported*
@@ -66,7 +66,7 @@ single-instance internal tool on a private network.
 - [x] [D2. `security.md` wrongly says `.claude/settings.json` is committed](#d2-securitymd-wrongly-says-claudesettingsjson-is-committed) — *fixed*
 - [x] [D3. A real internal IP is published in a committed file](#d3-a-real-internal-ip-is-published-in-a-committed-file) — *fixed*
 - [x] [D4. `api-reference.md` factual errors](#d4-api-referencemd-factual-errors) — *fixed*
-- [ ] [D5. Docs describe the dead features as working](#d5-docs-describe-the-dead-features-as-working) — *verified*
+- [x] [D5. Docs describe the dead features as working](#d5-docs-describe-the-dead-features-as-working) — *fixed*
 - [x] [D6. Diagnostics in the docs that do not work](#d6-diagnostics-in-the-docs-that-do-not-work) — *fixed*
 - [x] [D7. Smaller doc inaccuracies](#d7-smaller-doc-inaccuracies) — *fixed*
 - [x] [D8. Client setup recommends the wrong default for dev containers](#d8-client-setup-recommends-the-wrong-default-for-dev-containers) — *fixed*
@@ -77,7 +77,9 @@ single-instance internal tool on a private network.
 
 ### 1. Model price overrides and the budget cycle are dead code
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Resolved in the two directions the entry proposed. Model price overrides **removed** — `adjustedCost`, `modelPrices` and the settings section are gone, and the copy promising an adjusted-cost column with them; with no Admin API to reconcile against, a hand-entered price would have made the numbers less trustworthy. The budget cycle is **implemented**: `GET /api/budget` returns spend since the period start (computed in UTC from `billingCycleDay`) and the tablet bar uses it instead of the all-time total. Regression test `test_budget_cycle`.
 
 `dashboard/src/settings.ts:89` — `adjustedCost()` has exactly one reference in
 the repo: its own definition. `billingCycleDay` is written by the settings form
@@ -341,7 +343,9 @@ Fix: add `- ACTIVE_WINDOW_MINUTES=${ACTIVE_WINDOW_MINUTES:-15}` and an
 
 ### 12. Three different "active session" windows
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** One value, `ACTIVE_WINDOW_MINUTES`, served to the UI via `GET /api/settings`. `SessionsTable`'s hardcoded 15 minutes is gone and the tablet reads the same value; the settings page shows it read-only, because it also decides when unused sessions are purged and that is operator configuration rather than a display preference.
 
 | Where | Source | Default |
 | --- | --- | --- |
@@ -674,7 +678,9 @@ but gratuitous. Replace with `10.0.0.5` or similar.
 
 ### D5. Docs describe the dead features as working
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Corrected alongside the code decision, as the entry said to — `configuration.md`, `dashboard.md` and `troubleshooting.md` now describe what actually happens.
 
 `configuration.md`, `dashboard.md` (×3) and `troubleshooting.md` all describe
 model price overrides recomputing displayed cost, and the budget bar resetting on

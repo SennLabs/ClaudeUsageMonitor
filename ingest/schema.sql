@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS user_projects (
     updated_at    TEXT
 );
 
+-- Dashboard preferences. Single row: these are instance-wide, not per-viewer.
+-- Previously they lived in each browser's localStorage, which meant the wall
+-- tablet and a laptop disagreed and the server could not act on any of them.
+CREATE TABLE IF NOT EXISTS app_settings (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    data  TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_usage_events_session ON usage_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_usage_events_time ON usage_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);

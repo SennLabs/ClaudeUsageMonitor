@@ -498,6 +498,60 @@ def test_project_precedence() -> None:
     print("OK (precedence) - manual > resource > user_map, source recorded on each")
 
 
+
+def test_settings_round_trip() -> None:
+    """Settings live on the server so every viewer sees the same values."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        defaults = client.get("/api/settings").json()
+        assert defaults["refreshIntervalMs"] == 5000, defaults
+        assert defaults["monthlyBudget"] is None, defaults
+        # Read-only, supplied by the operator's environment
+        assert defaults["activeSessionWindowMin"] == db_module.ACTIVE_WINDOW_MINUTES
+
+        updated = client.put("/api/settings", json={"monthlyBudget": 250, "defaultTimeWindow": "7d"}).json()
+        assert updated["monthlyBudget"] == 250 and updated["defaultTimeWindow"] == "7d", updated
+        # A partial update must not reset the rest
+        assert updated["refreshIntervalMs"] == 5000, updated
+        assert client.get("/api/settings").json()["monthlyBudget"] == 250
+
+        # Read-only keys are ignored, not honoured
+        client.put("/api/settings", json={"activeSessionWindowMin": 999})
+        assert client.get("/api/settings").json()["activeSessionWindowMin"] == db_module.ACTIVE_WINDOW_MINUTES
+
+        for bad in ({"billingCycleDay": 31}, {"refreshIntervalMs": 10},
+                    {"defaultMetric": "bananas"}, {"monthlyBudget": -5}):
+            assert client.put("/api/settings", json=bad).status_code == 400, bad
+
+    print("OK (settings) - server-side, partial updates merge, invalid values rejected")
+
+
+def test_budget_cycle() -> None:
+    """The budget bar measures the current billing period, not all time."""
+    import datetime as _dt
+    _reset_db()
+
+    # cycle_start walks back to last month when today is before the cycle day
+    jan15 = _dt.datetime(2026, 1, 15, 12, 0, tzinfo=_dt.timezone.utc)
+    assert db_module.cycle_start(1, jan15).isoformat().startswith("2026-01-01"), "same month"
+    assert db_module.cycle_start(20, jan15).isoformat().startswith("2025-12-20"), "previous month"
+    mar3 = _dt.datetime(2026, 3, 3, 0, 30, tzinfo=_dt.timezone.utc)
+    assert db_module.cycle_start(28, mar3).isoformat().startswith("2026-02-28"), "across February"
+
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("b-old", age_seconds=75 * 24 * 3600, cost_usd=99.0))
+        client.post("/v1/logs", json=make_payload("b-new", cost_usd=1.5))
+
+        all_time = client.get("/api/summary").json()["total_cost_usd"]
+        cycle = client.get("/api/budget?cycle_day=1").json()
+
+        assert all_time > 100, all_time
+        assert cycle["cost_usd"] == 1.5, cycle
+        assert cycle["cycle_start"] <= _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+    print("OK (budget) - cycle spend excludes prior periods; all-time total unchanged")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -512,6 +566,8 @@ def main() -> None:
     test_oversized_body_rejected()
     test_project_from_resource_attribute()
     test_project_precedence()
+    test_settings_round_trip()
+    test_budget_cycle()
     test_no_cors_headers()
     test_docs_endpoints_disabled()
     test_refuses_to_start_without_a_token()  # reloads main_module; keep last

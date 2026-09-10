@@ -47,6 +47,17 @@ Written by `set_user_project`, which also relabels that user's existing
 sessions in the same transaction. Read in two places: `upsert_session` (so a new
 session is born labelled) and `fetch_users`.
 
+### `app_settings`
+
+A single row (`id = 1`) holding the dashboard preferences as a JSON blob in
+`data`. Instance-wide rather than per-viewer: these used to live in each
+browser's `localStorage`, so the wall tablet and a laptop disagreed and nothing
+server-side could act on them.
+
+Defaults live in `db.DEFAULT_SETTINGS` and unknown keys are ignored on write, so
+adding a setting needs no migration. `activeSessionWindowMin` is served
+alongside them but is **not** stored here — it comes from the environment.
+
 ### `usage_events`
 
 One row per received log record. Append-only — nothing updates or deletes here.

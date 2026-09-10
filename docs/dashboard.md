@@ -22,7 +22,7 @@ tokens, output tokens, cache read tokens, total cost.
 
 "Active" here means seen in the last 15 minutes, computed **server-side**. The
 `activeSessionWindowMin` setting does not change this card — see
-[Configuration](configuration.md#dashboard-preferences-client-side).
+[Configuration](configuration.md#dashboard-preferences).
 
 ### Usage chart
 
@@ -100,9 +100,11 @@ chrome. Same data, different priorities.
 - **Stat cards** — big-number active sessions, total cost, token totals.
 - **Refresh countdown** — seconds until the next poll, so a stale-looking screen
   is visibly still alive.
-- **Budget bar** — only when `monthlyBudget` is set. Shows spend against budget
-  for the current cycle, with the bar changing color as the fraction climbs.
-  `billingCycleDay` decides when it resets.
+- **Budget bar** — only when `monthlyBudget` is set. Shows spend for the
+  current billing period against the budget, from `GET /api/budget`, with the
+  bar changing colour as the fraction climbs. `billingCycleDay` decides when
+  the period starts; before 2026-09-10 the bar actually showed all-time spend
+  and never reset.
 - **Active session list** — per-session state with a relative "time ago", using
   the client-side `activeSessionWindowMin` to mark each one active or idle.
 - **Project rollup** — cost, active count, and session count per project.
@@ -156,10 +158,13 @@ large `(untagged)` bucket.
 
 ## `/settings` — preferences and backups
 
-All preferences except the backup controls are stored in that browser's
-`localStorage` (key `claudeMonitorSettings`). They are read once when a view
-mounts, so a dashboard already open in another tab keeps the old values until it
-is reloaded.
+Preferences are stored **on the server** and apply to every viewer. Saving
+pushes the new values into the shared settings resource, so an open tablet
+picks them up without being touched.
+
+The **Active session window** is shown but not editable — it comes from the
+`ACTIVE_WINDOW_MINUTES` environment variable, because it also governs when an
+unused session is deleted.
 
 **Budget** — monthly budget amount and the day of month it resets (1–28; capped
 at 28 so every month has that day).
@@ -173,11 +178,11 @@ disables it.
 **Refresh** — poll interval, and the active-session window used by the tablet
 view.
 
-**Model prices** — per-model overrides in dollars per million input and output
-tokens. Add a model by its exact reported name (as shown in the Usage by model
-table), and the dashboard recomputes that model's cost from raw token counts
-instead of using the reported `cost_usd`. Models without an override are
-untouched. This affects display only; stored data is never rewritten.
+Model price overrides were **removed** on 2026-09-10. They had never been
+wired to anything — the setting saved and no displayed figure changed — and
+with no way to reconcile against Anthropic's billed figures, a hand-entered
+price would have made the numbers less trustworthy rather than more. `cost_usd`
+as reported by Claude Code is the only cost figure shown.
 
 **Backup** — the one server-side section. It reads `/api/backup/status` and
 shows destination, method (`copy` or `rsync-ssh`), schedule, next run, last run,
@@ -198,8 +203,8 @@ at sunset.
 
 ## Notes and limits
 
-- **Settings are per browser.** They don't sync between your laptop and the wall
-  tablet, and clearing site data resets them.
+- **Settings are server-side** as of 2026-09-10, so every viewer shares them.
+  Only the theme is per-device.
 - **The sessions table is capped at 100 rows** server-side, ordered by recency.
   Older sessions still count toward totals but drop off the table.
 - **Cost figures are what the client reported**, unless you have set a price

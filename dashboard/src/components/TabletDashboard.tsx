@@ -1,8 +1,9 @@
-import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import { fetchSessions, fetchSummary, fetchUsageOverTime, fetchUsageOverTimeByProject } from '../api'
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show } from 'solid-js'
+import { fetchBudget, fetchSessions, fetchSummary, fetchUsageOverTime, fetchUsageOverTimeByProject } from '../api'
 import { formatCost, formatNumber } from '../format'
 import { errorMessage, firstError, latest } from '../resource'
-import { computeHourlyRate, loadSettings, WINDOW_HOURS, WINDOW_OPTIONS } from '../settings'
+import { computeHourlyRate, WINDOW_HOURS, WINDOW_OPTIONS } from '../settings'
+import { settings } from '../settingsStore'
 import type { TimeWindow } from '../settings'
 import type { Metric } from './UsageChart'
 import UsageChart from './UsageChart'
@@ -40,63 +41,69 @@ function ToggleBtn<T extends string>(props: {
 }
 
 export default function TabletDashboard() {
-  const settings = loadSettings()
-  const REFRESH_MS = settings.refreshIntervalMs
-
-  const [metric, setMetric] = createSignal<Metric>(settings.defaultMetric)
+  const [metric, setMetric] = createSignal<Metric | null>(null)
   const [groupBy, setGroupBy] = createSignal<'session' | 'project'>('session')
-  const [timeWindow, setTimeWindow] = createSignal<TimeWindow>(settings.defaultTimeWindow)
-  const hours = createMemo(() => WINDOW_HOURS[timeWindow()])
-  const [countdown, setCountdown] = createSignal(REFRESH_MS / 1000)
+  const [timeWindow, setTimeWindow] = createSignal<TimeWindow | null>(null)
+
+  const activeMetric = () => metric() ?? settings().defaultMetric
+  const activeWindow = () => timeWindow() ?? settings().defaultTimeWindow
+  const hours = createMemo(() => WINDOW_HOURS[activeWindow()])
+  const [countdown, setCountdown] = createSignal(5)
 
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
   const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
-  const [usageTime, { refetch: refetchTime }] = createResource(timeWindow, (w) =>
+  const [budgetUsage, { refetch: refetchBudget }] = createResource(fetchBudget)
+  const [usageTime, { refetch: refetchTime }] = createResource(activeWindow, (w) =>
     fetchUsageOverTime(WINDOW_HOURS[w]),
   )
-  const [usageByProject, { refetch: refetchByProject }] = createResource(timeWindow, (w) =>
+  const [usageByProject, { refetch: refetchByProject }] = createResource(activeWindow, (w) =>
     fetchUsageOverTimeByProject(WINDOW_HOURS[w]),
   )
 
-  let timer: ReturnType<typeof setInterval>
-  let countdownTimer: ReturnType<typeof setInterval>
-
-  onMount(() => {
-    timer = setInterval(() => {
+  // Effects rather than onMount, so a change to the interval in Settings takes
+  // effect on this screen without someone walking over to reload it.
+  createEffect(() => {
+    const ms = settings().refreshIntervalMs
+    setCountdown(ms / 1000)
+    const timer = setInterval(() => {
       refetchSummary()
       refetchSessions()
+      refetchBudget()
       refetchTime()
       refetchByProject()
-      setCountdown(REFRESH_MS / 1000)
-    }, REFRESH_MS)
-
-    countdownTimer = setInterval(() => setCountdown((n) => Math.max(0, n - 1)), 1000)
+      setCountdown(ms / 1000)
+    }, ms)
+    onCleanup(() => clearInterval(timer))
   })
 
-  onCleanup(() => {
-    clearInterval(timer)
-    clearInterval(countdownTimer)
+  createEffect(() => {
+    const countdownTimer = setInterval(() => setCountdown((n) => Math.max(0, n - 1)), 1000)
+    onCleanup(() => clearInterval(countdownTimer))
   })
-
-  const activeWindowMin = settings.activeSessionWindowMin
 
   const activeSessions = createMemo(() =>
-    (latest(sessions) ?? []).filter((s) => isActive(s.last_seen_at, activeWindowMin)),
+    (latest(sessions) ?? []).filter((s) =>
+      isActive(s.last_seen_at, settings().activeSessionWindowMin),
+    ),
   )
 
   const costRatePerHour = createMemo(() => computeHourlyRate(latest(usageTime) ?? [], hours()))
 
   const alertActive = createMemo(() => {
-    const t = settings.costAlertThresholdPerHour
+    const t = settings().costAlertThresholdPerHour
     return t !== null && costRatePerHour() > t
   })
 
-  const budget = settings.monthlyBudget
+  // Spend for the CURRENT billing period, from /api/budget. This used to divide
+  // the all-time total by the budget, so the bar never reset and
+  // billingCycleDay did nothing at all.
+  const budget = () => settings().monthlyBudget
+  const cycleSpend = () => latest(budgetUsage)?.cost_usd ?? 0
 
   const usedFraction = createMemo(() => {
-    const s = latest(summary)
-    if (!budget || !s) return null
-    return Math.min(s.total_cost_usd / budget, 1)
+    const b = budget()
+    if (!b || !latest(budgetUsage)) return null
+    return Math.min(cycleSpend() / b, 1)
   })
 
   const budgetBarColor = createMemo(() => {
@@ -112,13 +119,13 @@ export default function TabletDashboard() {
   )
 
   const apiError = createMemo(() =>
-    firstError(summary, sessions, usageTime, usageByProject),
+    firstError(summary, sessions, budgetUsage, usageTime, usageByProject),
   )
 
   const chartProps = createMemo(() =>
     groupBy() === 'project'
-      ? { projectData: latest(usageByProject), metric: metric(), hours: hours() }
-      : { data: latest(usageTime), metric: metric(), hours: hours() },
+      ? { projectData: latest(usageByProject), metric: activeMetric(), hours: hours() }
+      : { data: latest(usageTime), metric: activeMetric(), hours: hours() },
   )
 
   return (
@@ -133,7 +140,7 @@ export default function TabletDashboard() {
               {(opt) => (
                 <ToggleBtn
                   value={opt.value}
-                  current={timeWindow()}
+                  current={activeWindow()}
                   label={opt.label}
                   onClick={setTimeWindow}
                 />
@@ -141,8 +148,8 @@ export default function TabletDashboard() {
             </For>
           </div>
           <div class="flex items-center gap-1 rounded-lg border border-slate-800 overflow-hidden">
-            <ToggleBtn value="cost" current={metric()} label="Cost" onClick={setMetric} />
-            <ToggleBtn value="tokens" current={metric()} label="Tokens" onClick={setMetric} />
+            <ToggleBtn value="cost" current={activeMetric()} label="Cost" onClick={setMetric} />
+            <ToggleBtn value="tokens" current={activeMetric()} label="Tokens" onClick={setMetric} />
           </div>
           <div class="flex items-center gap-1 rounded-lg border border-slate-800 overflow-hidden">
             <ToggleBtn value="session" current={groupBy()} label="Sessions" onClick={setGroupBy} />
@@ -150,15 +157,15 @@ export default function TabletDashboard() {
           </div>
         </div>
         <div class="flex items-center gap-4">
-          <Show when={budget}>
+          <Show when={budget() !== null}>
             <a
               href="/settings"
               class="text-xs text-slate-600 hover:text-slate-400 transition"
             >
-              Budget: ${budget}/mo
+              Budget: ${budget()}/mo
             </a>
           </Show>
-          <Show when={!budget}>
+          <Show when={budget() === null}>
             <a
               href="/settings"
               class="text-xs text-slate-600 hover:text-slate-400 transition"
@@ -177,7 +184,7 @@ export default function TabletDashboard() {
             <div class="h-1 w-16 rounded-full bg-slate-800 overflow-hidden">
               <div
                 class="h-full bg-slate-600 transition-all duration-1000"
-                style={{ width: `${(countdown() / (REFRESH_MS / 1000)) * 100}%` }}
+                style={{ width: `${(countdown() / (settings().refreshIntervalMs / 1000)) * 100}%` }}
               />
             </div>
           </div>
@@ -190,7 +197,7 @@ export default function TabletDashboard() {
           <span class="text-xl">⚠</span>
           <p class="text-sm font-semibold text-amber-300">
             Hourly spend rate ({formatCost(costRatePerHour())}) exceeds alert threshold
-            (${settings.costAlertThresholdPerHour!.toFixed(2)}/hr)
+            (${settings().costAlertThresholdPerHour!.toFixed(2)}/hr)
           </p>
         </div>
       </Show>
@@ -234,13 +241,13 @@ export default function TabletDashboard() {
       </div>
 
       {/* Budget bar */}
-      <Show when={budget}>
+      <Show when={budget() !== null}>
         <div class="mb-5 rounded-xl bg-slate-900 border border-slate-800 px-4 py-3">
           <div class="flex items-center justify-between mb-1.5">
             <span class="text-xs font-medium text-slate-400">Monthly budget</span>
             <span class="text-xs text-slate-500">
               <Show when={usedFraction() !== null}>
-                {(usedFraction()! * 100).toFixed(1)}% · {formatCost(latest(summary)?.total_cost_usd ?? 0)} of ${budget}
+                {(usedFraction()! * 100).toFixed(1)}% · {formatCost(cycleSpend())} of ${budget()} this cycle
               </Show>
             </span>
           </div>
@@ -309,7 +316,7 @@ export default function TabletDashboard() {
                 const cur = map.get(key) ?? { cost: 0, active: 0, sessions: 0 }
                 map.set(key, {
                   cost: cur.cost + s.cost_usd,
-                  active: cur.active + (isActive(s.last_seen_at, activeWindowMin) ? 1 : 0),
+                  active: cur.active + (isActive(s.last_seen_at, settings().activeSessionWindowMin) ? 1 : 0),
                   sessions: cur.sessions + 1,
                 })
               }

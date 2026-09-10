@@ -1,4 +1,4 @@
-import { createMemo, createResource, createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from 'solid-js'
 import {
   fetchSessions,
   fetchSummary,
@@ -12,8 +12,9 @@ import SummaryCards from './components/SummaryCards'
 import ThemeToggle from './components/ThemeToggle'
 import UsageChart, { type Metric } from './components/UsageChart'
 import { errorMessage, firstError, latest } from './resource'
-import { computeHourlyRate, loadSettings, WINDOW_HOURS, WINDOW_OPTIONS } from './settings'
+import { computeHourlyRate, WINDOW_HOURS, WINDOW_OPTIONS } from './settings'
 import type { TimeWindow } from './settings'
+import { settings } from './settingsStore'
 
 function ToggleGroup<T extends string>(props: {
   value: T
@@ -41,45 +42,45 @@ function ToggleGroup<T extends string>(props: {
 }
 
 export default function App() {
-  const settings = loadSettings()
-  const [metric, setMetric] = createSignal<Metric>(settings.defaultMetric)
+  const [metric, setMetric] = createSignal<Metric | null>(null)
   const [groupBy, setGroupBy] = createSignal<'session' | 'project'>('session')
-  const [timeWindow, setTimeWindow] = createSignal<TimeWindow>(settings.defaultTimeWindow)
-  const hours = createMemo(() => WINDOW_HOURS[timeWindow()])
+  const [timeWindow, setTimeWindow] = createSignal<TimeWindow | null>(null)
+
+  // Null until the user picks one, so the server-configured default applies as
+  // soon as settings load rather than being frozen at first render.
+  const activeMetric = () => metric() ?? settings().defaultMetric
+  const activeWindow = () => timeWindow() ?? settings().defaultTimeWindow
+  const hours = createMemo(() => WINDOW_HOURS[activeWindow()])
 
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
   const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
   const [usageByModel, { refetch: refetchUsage }] = createResource(fetchUsageByModel)
-  const [usageOverTime, { refetch: refetchTime }] = createResource(timeWindow, (w) =>
+  const [usageOverTime, { refetch: refetchTime }] = createResource(activeWindow, (w) =>
     fetchUsageOverTime(WINDOW_HOURS[w]),
   )
-  const [usageByProject, { refetch: refetchByProject }] = createResource(timeWindow, (w) =>
+  const [usageByProject, { refetch: refetchByProject }] = createResource(activeWindow, (w) =>
     fetchUsageOverTimeByProject(WINDOW_HOURS[w]),
   )
 
-  let timer: ReturnType<typeof setInterval>
-
-  onMount(() => {
-    timer = setInterval(
-      () => {
-        refetchSummary()
-        refetchSessions()
-        refetchUsage()
-        refetchTime()
-        refetchByProject()
-      },
-      settings.refreshIntervalMs,
-    )
+  // An effect rather than onMount, so changing the interval in Settings takes
+  // effect immediately instead of on the next page load.
+  createEffect(() => {
+    const timer = setInterval(() => {
+      refetchSummary()
+      refetchSessions()
+      refetchUsage()
+      refetchTime()
+      refetchByProject()
+    }, settings().refreshIntervalMs)
+    onCleanup(() => clearInterval(timer))
   })
-
-  onCleanup(() => clearInterval(timer))
 
   const costRatePerHour = createMemo(() =>
     computeHourlyRate(latest(usageOverTime) ?? [], hours()),
   )
 
   const alertActive = createMemo(() => {
-    const t = settings.costAlertThresholdPerHour
+    const t = settings().costAlertThresholdPerHour
     return t !== null && costRatePerHour() > t
   })
 
@@ -89,8 +90,8 @@ export default function App() {
 
   const chartProps = createMemo(() =>
     groupBy() === 'project'
-      ? { projectData: latest(usageByProject), metric: metric(), hours: hours() }
-      : { data: latest(usageOverTime), metric: metric(), hours: hours() },
+      ? { projectData: latest(usageByProject), metric: activeMetric(), hours: hours() }
+      : { data: latest(usageOverTime), metric: activeMetric(), hours: hours() },
   )
 
   return (
@@ -126,7 +127,7 @@ export default function App() {
         <div class="border-b border-amber-200 bg-amber-50 px-6 py-2.5 dark:border-amber-800 dark:bg-amber-950">
           <p class="mx-auto max-w-6xl text-sm font-medium text-amber-800 dark:text-amber-300">
             ⚠ Hourly spend rate (${costRatePerHour().toFixed(2)}) has exceeded your alert threshold
-            (${settings.costAlertThresholdPerHour!.toFixed(2)}/hr)
+            (${settings().costAlertThresholdPerHour!.toFixed(2)}/hr)
           </p>
         </div>
       </Show>
@@ -140,9 +141,9 @@ export default function App() {
           {/* Chart controls */}
           <div class="mb-3 flex items-center justify-between gap-3 flex-wrap">
             <div class="flex items-center gap-2">
-              <ToggleGroup value={timeWindow()} options={WINDOW_OPTIONS} onChange={setTimeWindow} />
+              <ToggleGroup value={activeWindow()} options={WINDOW_OPTIONS} onChange={setTimeWindow} />
               <ToggleGroup
-                value={metric()}
+                value={activeMetric()}
                 options={[
                   { value: 'cost', label: 'Cost' },
                   { value: 'tokens', label: 'Tokens' },

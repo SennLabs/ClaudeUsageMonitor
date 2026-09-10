@@ -224,6 +224,34 @@ async def remove_user_project(user_id: str, clear_sessions: bool = False):
     return {"ok": True}
 
 
+# ── Dashboard settings ─────────────────────────────────────────────────────
+
+@app.get("/api/settings", dependencies=[Depends(require_auth)])
+async def get_settings():
+    return db.fetch_settings()
+
+
+@app.put("/api/settings", dependencies=[Depends(require_auth)])
+async def put_settings(patch: dict):
+    """
+    Merge a partial settings update. Unknown and read-only keys are ignored
+    rather than rejected, so a newer dashboard talking to an older server
+    degrades instead of failing.
+    """
+    try:
+        return db.update_settings(patch)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/budget", dependencies=[Depends(require_auth)])
+async def get_budget(cycle_day: int | None = None):
+    """Spend since the start of the current billing period."""
+    if cycle_day is None:
+        cycle_day = int(db.fetch_settings()["billingCycleDay"])
+    return db.fetch_budget_usage(cycle_day)
+
+
 # ── Backup endpoints ───────────────────────────────────────────────────────
 
 @app.get("/api/backup/status", dependencies=[Depends(require_auth)])

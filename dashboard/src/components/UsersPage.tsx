@@ -1,9 +1,9 @@
-import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show } from 'solid-js'
 import type { UserRow } from '../api'
 import { fetchProjects, fetchUsers, setUserProject } from '../api'
 import { formatCost, formatNumber, formatTime } from '../format'
 import { errorMessage, firstError, latest } from '../resource'
-import { loadSettings } from '../settings'
+import { settings } from '../settingsStore'
 import ThemeToggle from './ThemeToggle'
 
 function relative(iso: string | null) {
@@ -16,8 +16,6 @@ function relative(iso: string | null) {
 }
 
 export default function UsersPage() {
-  const settings = loadSettings()
-
   const [users, { refetch: refetchUsers }] = createResource(fetchUsers)
   const [projects, { refetch: refetchProjects }] = createResource(fetchProjects)
 
@@ -27,17 +25,16 @@ export default function UsersPage() {
   const [notice, setNotice] = createSignal<string | null>(null)
   const [error, setError] = createSignal<string | null>(null)
 
-  let timer: ReturnType<typeof setInterval>
-  onMount(() => {
-    timer = setInterval(() => {
+  createEffect(() => {
+    const timer = setInterval(() => {
       // Don't yank the field out from under an in-progress edit
       if (editingId() === null) {
         refetchUsers()
         refetchProjects()
       }
-    }, settings.refreshIntervalMs)
+    }, settings().refreshIntervalMs)
+    onCleanup(() => clearInterval(timer))
   })
-  onCleanup(() => clearInterval(timer))
 
   function startEdit(user: UserRow) {
     setEditValue(user.project_name ?? '')
