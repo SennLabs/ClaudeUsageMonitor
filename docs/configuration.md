@@ -23,10 +23,13 @@ cp .env.example .env
 | `BACKUP_INTERVAL_HOURS` | `24` | Hours between scheduled backups. Decimals allowed (`0.5` = every 30 min); minimum one minute. A non-numeric or too-small value disables backups and is reported in the status. |
 | `BACKUP_KEEP` | `7` | How many timestamped snapshots to retain. Minimum 1. **Copy mode only** — nothing prunes an rsync destination, and the status says so. |
 | `BACKUP_FIRST_RUN_DELAY_SECONDS` | `60` | How long after startup the first scheduled backup runs. |
-| `BACKUP_SSH_KEY` | *(empty)* | Path *inside the container* to a private key for rsync mode. Mount it in as a read-only volume. |
+| `BACKUP_SSH_KEY` | *(empty)* | Path *inside the container* to a private key for rsync mode. Mount it in as a read-only volume. No spaces — rsync word-splits the `-e` argument. |
+| `BACKUP_SSH_KNOWN_HOSTS` | *(empty)* | Path inside the container to a `known_hosts` file. Set it to verify the destination's host key; without it the connection is accepted blind and the status says so. |
 | `LOG_LEVEL` | `INFO` | Level for this application's loggers. Backup and purge activity is logged at INFO; third-party loggers stay at WARNING regardless. |
 | `DB_BUSY_TIMEOUT_SECONDS` | `15` | How long a write waits for the SQLite lock before failing. A failure here becomes a 500, which an exporter retries — waiting is better. |
 | `MAX_LOG_BODY_BYTES` | `33554432` (32 MB) | Largest accepted `POST /v1/logs` body. `/v1/logs` is not proxied through nginx, so nginx's own limit never applies to it. |
+| `RAW_ATTRIBUTES_RETENTION_DAYS` | `0` (off) | Null `raw_attributes` on events older than this. Reclaims most of the disk without changing a single displayed number — reach for this first. |
+| `RETENTION_DAYS` | `0` (off) | **Delete** events older than this, and the sessions left empty by it. This does change historical totals, which is why it is off by default. |
 
 Backup variables are covered in depth in [Backup and restore](backup-and-restore.md).
 

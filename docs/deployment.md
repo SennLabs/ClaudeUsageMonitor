@@ -15,7 +15,9 @@ and runs:
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Health check every 30s: an HTTP GET of `/healthz` via `urllib`.
+Health check every 30s: an HTTP GET of `/healthz` via `urllib`. That endpoint
+runs a `SELECT 1`, so a locked, corrupt or full-disk database returns 503 and
+the container is marked unhealthy.
 
 ### dashboard
 
@@ -23,14 +25,17 @@ Two stages:
 
 1. `node:22-slim` — `npm ci` then `npm run build` (`tsc -b && vite build`),
    producing `dist/`.
-2. `nginx:1.27-alpine` — serves `dist/` and installs
+2. `nginx:1.29-alpine` — serves `dist/` and installs
    `nginx.conf.template` into `/etc/nginx/templates/default.conf.template`.
 
 The nginx base image runs `envsubst` over anything in `/etc/nginx/templates/` at
 container start, which is how `INGEST_AUTH_TOKEN` gets into the
 `proxy_set_header Authorization` line without ever reaching the browser.
 
-Health check every 30s: `wget --spider http://localhost/`.
+Health check every 30s: `wget --spider http://localhost/api/summary` — the
+proxy path, not just the static files. Fetching `/` only proved nginx was up:
+with ingest down or the token mismatched, every `/api/` call 401s or 502s
+while the container still reported healthy.
 
 ## nginx configuration
 
@@ -148,6 +153,53 @@ that with TLS too — proxy to 9585 and pass the `Authorization` header through
 untouched — which is worth doing if clients report from outside the LAN. Do not
 strip or rewrite that header.
 
+## Container hardening
+
+Applied by default in `docker-compose.yml`, because none of it can break a
+bind mount:
+
+```yaml
+security_opt: ["no-new-privileges:true"]
+cap_drop: [ALL]          # ingest only
+mem_limit: 512m          # 128m on the dashboard
+pids_limit: 200
+```
+
+The dashboard also waits for ingest to be *healthy* rather than merely started
+(`depends_on: condition: service_healthy`).
+
+**Running as non-root is not the default**, deliberately. The ingest container
+is the one that matters — the backup SSH key and the database bind mount are
+both there — but switching needs the host-side ownership to match first, and
+the order matters:
+
+```bash
+docker compose down
+sudo chown -R 1000:1000 ./usage-data     # or whatever UID you pick
+# then add to the ingest service in docker-compose.yml:
+#   user: "1000:1000"
+docker compose up -d
+```
+
+Setting `user:` without the `chown` leaves ingest unable to write its own
+database.
+
+**Published ports bind every interface.** Docker's rules sit ahead of the
+`INPUT` chain, so `ufw deny 9585` does **not** block them. Bind an explicit
+address instead:
+
+```yaml
+ports:
+  - "192.168.1.50:9585:8000"
+```
+
+or add rules to the `DOCKER-USER` chain, which *is* consulted.
+
+**Dependencies are pinned.** `requirements.txt` names exact versions rather
+than floors, so two builds a month apart produce the same software. Bump them
+deliberately and re-run the test suite. Base images are still tag-pinned rather
+than digest-pinned.
+
 ## Resource expectations
 
 Both containers are small. ingest is idle apart from short bursts on each batch;
@@ -188,7 +240,8 @@ external monitoring:
 
 | Check | Meaning |
 | --- | --- |
-| `GET /healthz` returns 200 | ingest is serving |
+| `GET /healthz` returns 200 | ingest is serving **and** can read the database |
+| `GET /api/maintenance` → `last_ok` | the background purge/retention sweep is working |
 | `GET /api/summary` returns 200 with auth | ingest can read the database |
 | `GET /api/backup/status` → `last_backup_ok` | last backup attempt in this process |
 | `GET /` on 9595 returns 200 | dashboard is serving |

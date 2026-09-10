@@ -2,6 +2,9 @@ services:
   ingest:
     build: ./ingest
     ports:
+      # Published on every interface. Docker's rules sit ahead of the INPUT
+      # chain, so `ufw deny 9585` does NOT block this — bind an explicit
+      # address instead, e.g. "192.168.1.50:9585:8000". See docs/security.md.
       - "9585:8000"
     environment:
       - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
@@ -20,6 +23,16 @@ services:
       - BACKUP_KEEP=${BACKUP_KEEP:-7}
       # Path to SSH private key inside the container (mount it via volumes below)
       - BACKUP_SSH_KEY=${BACKUP_SSH_KEY:-}
+    # Hardening that cannot break a bind mount. Running as a non-root user is
+    # the bigger win but needs the host-side ownership of ./usage-data to match
+    # — see docs/deployment.md before enabling it:
+    #   user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    pids_limit: 200
     volumes:
       - ./usage-data:/data
       # Uncomment and adjust if using rsync-over-SSH backup:
@@ -38,7 +51,11 @@ services:
     environment:
       - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
     depends_on:
-      - ingest
+      ingest:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
     restart: unless-stopped
 
 #volumes:

@@ -60,7 +60,7 @@ export default function App() {
 
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
   const [spendRate, { refetch: refetchRate }] = createResource(fetchSpendRate)
-  const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
+  const [sessions, { refetch: refetchSessions }] = createResource(() => fetchSessions())
   const [usageByModel, { refetch: refetchUsage }] = createResource(fetchUsageByModel)
   const [usageOverTime, { refetch: refetchTime }] = createResource(activeWindow, (w) =>
     fetchUsageOverTime(WINDOW_HOURS[w]),
@@ -198,7 +198,8 @@ export default function App() {
             />
           </div>
           <SessionsTable
-            sessions={latest(sessions)}
+            sessions={latest(sessions)?.sessions}
+            total={latest(sessions)?.total}
             groupByProject={groupBy() === 'project'}
             onEditingChange={setEditing}
           />

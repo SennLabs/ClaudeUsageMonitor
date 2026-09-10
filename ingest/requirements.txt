@@ -1,2 +1,5 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
+# Pinned: unpinned floors meant two builds a month apart produced different
+# software with no record of what changed. Bump deliberately and re-run the
+# test suite.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4

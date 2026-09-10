@@ -24,6 +24,12 @@ ACTIVE_WINDOW_MINUTES = int(os.environ.get("ACTIVE_WINDOW_MINUTES", "15"))
 # exporter retries — so wait rather than fail.
 BUSY_TIMEOUT_SECONDS = float(os.environ.get("DB_BUSY_TIMEOUT_SECONDS", "15"))
 
+# Nothing used to delete an event, ever. raw_attributes is the bulk of each
+# row, so dropping it from old events reclaims most of the space while keeping
+# every number the dashboard shows. 0 disables each sweep.
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "0"))
+RAW_ATTRIBUTES_RETENTION_DAYS = int(os.environ.get("RAW_ATTRIBUTES_RETENTION_DAYS", "0"))
+
 # SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999 on some builds.
 _MAX_SQL_VARIABLES = 900
 
@@ -34,6 +40,9 @@ def _connect():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_SECONDS * 1000)}")
+    # SQLite ignores REFERENCES unless this is set per connection, so
+    # usage_events.session_id -> sessions.session_id was declarative only.
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
@@ -242,6 +251,12 @@ def _cutoff(minutes: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
+def ping() -> None:
+    """Prove the database is reachable and readable. Used by /healthz."""
+    with _connect() as conn:
+        conn.execute("SELECT 1 FROM usage_events LIMIT 1").fetchone()
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -441,6 +456,46 @@ def purge_empty_sessions(minutes: int | None = None) -> int:
             conn.execute(f"DELETE FROM usage_events WHERE session_id IN ({marks})", chunk)
             conn.execute(f"DELETE FROM sessions WHERE session_id IN ({marks})", chunk)
         return len(ids)
+
+
+
+def apply_retention() -> dict:
+    """
+    Enforce the retention settings. Returns what it did.
+
+    Two independent knobs, because they trade off differently:
+      RAW_ATTRIBUTES_RETENTION_DAYS nulls raw_attributes on older events. Every
+        aggregate stays correct — only the raw JSON, which is the bulk of each
+        row, goes. This is the one to reach for first.
+      RETENTION_DAYS deletes the events outright, which does change historical
+        totals. Off by default for that reason.
+    """
+    result = {"attributes_cleared": 0, "events_deleted": 0}
+
+    with _connect() as conn:
+        if RAW_ATTRIBUTES_RETENTION_DAYS > 0:
+            cur = conn.execute(
+                "UPDATE usage_events SET raw_attributes = NULL "
+                " WHERE raw_attributes IS NOT NULL AND occurred_at < ?",
+                (_cutoff(RAW_ATTRIBUTES_RETENTION_DAYS * 24 * 60),),
+            )
+            result["attributes_cleared"] = cur.rowcount
+
+        if RETENTION_DAYS > 0:
+            cutoff = _cutoff(RETENTION_DAYS * 24 * 60)
+            cur = conn.execute("DELETE FROM usage_events WHERE occurred_at < ?", (cutoff,))
+            result["events_deleted"] = cur.rowcount
+            # Sessions whose events have all aged out are now empty shells.
+            conn.execute(
+                """
+                DELETE FROM sessions
+                 WHERE last_seen_at < ?
+                   AND session_id NOT IN (SELECT DISTINCT session_id FROM usage_events
+                                           WHERE session_id IS NOT NULL)
+                """,
+                (cutoff,),
+            )
+    return result
 
 
 # ── user.id -> project mapping ─────────────────────────────────────────────
@@ -706,7 +761,12 @@ def fetch_summary(active_within_minutes: int | None = None) -> dict:
         return {**dict(totals), **dict(active), **dict(unattributed)}
 
 
-def fetch_sessions(limit: int = 100) -> list[dict]:
+def count_sessions() -> int:
+    with _connect() as conn:
+        return conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"]
+
+
+def fetch_sessions(limit: int = 100, offset: int = 0) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -727,9 +787,9 @@ def fetch_sessions(limit: int = 100) -> list[dict]:
             LEFT JOIN usage_events e ON e.session_id = s.session_id
             GROUP BY s.session_id
             ORDER BY s.last_seen_at DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (limit,),
+            (limit, offset),
         ).fetchall()
         return [dict(row) for row in rows]
 

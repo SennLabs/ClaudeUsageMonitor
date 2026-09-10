@@ -138,6 +138,8 @@ function GroupedTable(props: { sessions: SessionRow[] }) {
 
 export default function SessionsTable(props: {
   sessions: SessionRow[] | undefined
+  /** Total on the server; shown when the list is truncated. */
+  total?: number
   groupByProject?: boolean
   /** Lets the parent pause polling while a row is being edited. */
   onEditingChange?: (editing: boolean) => void
@@ -297,6 +299,12 @@ export default function SessionsTable(props: {
             </For>
           </tbody>
         </table>
+        <Show when={props.total !== undefined && props.total > (props.sessions?.length ?? 0)}>
+          <p class="border-t border-slate-200 px-4 py-2 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+            Showing the {props.sessions?.length} most recent of {props.total} sessions. Totals in
+            the summary cards cover all of them.
+          </p>
+        </Show>
         {(!props.sessions || props.sessions.length === 0) && (
           <p class="p-6 text-center text-sm text-slate-500 dark:text-slate-400">
             No sessions yet — once a Claude Code session reports usage, it'll show up here.

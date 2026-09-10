@@ -127,7 +127,16 @@ async function getJSON<T>(path: string): Promise<T> {
 }
 
 export const fetchSummary = () => getJSON<Summary>('/summary')
-export const fetchSessions = () => getJSON<SessionRow[]>('/sessions')
+export interface SessionPage {
+  total: number
+  limit: number
+  offset: number
+  sessions: SessionRow[]
+}
+
+/** `total` lets the UI say when the list is truncated rather than quietly disagreeing with the summary. */
+export const fetchSessions = (limit = 100, offset = 0) =>
+  getJSON<SessionPage>(`/sessions?limit=${limit}&offset=${offset}`)
 export const fetchUsageByModel = () => getJSON<ModelUsage[]>('/usage-by-model')
 // hours = 0 means all time; anything else is a look-back capped at 720h.
 export const fetchUsageOverTime = (hours = 24) =>

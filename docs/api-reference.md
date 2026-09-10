@@ -109,7 +109,10 @@ Unauthenticated. Used by the container `HEALTHCHECK`.
 {"status": "ok"}
 ```
 
-It confirms the process is serving, not that the database is writable.
+It **does** touch the database — a `SELECT 1` — and returns `503` when that
+fails. A static 200 previously reported healthy while the file was locked,
+corrupt, or on a full disk, which are exactly the conditions a health check
+exists to catch.
 
 ---
 
@@ -144,11 +147,24 @@ All-time totals plus a live active count.
 
 ## `GET /api/sessions`
 
-The 100 most recently active sessions, each with its rolled-up usage.
+Sessions, newest first, with rolled-up usage.
+
+| Query param | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `limit` | int | `100` | Clamped to 1–500 |
+| `offset` | int | `0` | For paging |
+
+> **Response shape changed on 2026-09-10.** This returns an envelope, not a
+> bare array. `total` is what lets a caller tell the list is truncated — the
+> per-project totals computed from it used to disagree silently with the
+> all-time summary past 100 sessions.
 
 ```json
-[
-  {
+{
+  "total": 137,
+  "limit": 100,
+  "offset": 0,
+  "sessions": [{
     "session_id": "session-abc",
     "user_id": "user-123",
     "organization_id": "org-456",
@@ -161,11 +177,11 @@ The 100 most recently active sessions, each with its rolled-up usage.
     "output_tokens": 9821,
     "cost_usd": 3.42,
     "models": "claude-opus-5,claude-haiku-4-5-20251001"
-  }
-]
+  }]
+}
 ```
 
-- Ordered by `last_seen_at` descending, hard-limited to 100.
+- Ordered by `last_seen_at` descending.
 - `models` is a comma-joined `GROUP_CONCAT(DISTINCT …)` — a string, not an array.
 - `project_name` is `null` until something tags the session; `project_source`
   says what did (`resource`, `user_map` or `manual`) — see
@@ -420,6 +436,23 @@ Up to 30 rows from `claude_code.tool_result`, ordered by call count:
 ```json
 [{"tool_name": "Bash", "calls": 240, "failures": 11, "avg_ms": 820, "max_ms": 30000}]
 ```
+
+### `GET /api/maintenance`
+
+State of the background sweep, so a persistently failing one is visible rather
+than only logged.
+
+```json
+{
+  "last_run_at": "2026-09-10T07:41:02+00:00",
+  "last_ok": true, "last_error": null,
+  "sessions_purged": 3, "attributes_cleared": 0, "events_deleted": 0,
+  "interval_seconds": 60, "active_window_minutes": 15,
+  "retention_days": null, "raw_attributes_retention_days": null
+}
+```
+
+Counters are cumulative for this process and reset on restart.
 
 ### `GET /api/fleet`
 

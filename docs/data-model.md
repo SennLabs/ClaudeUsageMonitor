@@ -326,17 +326,29 @@ WHERE s.user_id IS NOT NULL AND up.user_id IS NULL;
 Open the file read-only (`sqlite3 -readonly`) if the service is running and you
 only intend to look.
 
+`PRAGMA foreign_keys = ON` is set on every connection, so
+`usage_events.session_id → sessions.session_id` is now enforced rather than
+declarative. Deleting a session with events still attached fails; delete the
+events first, as the purge and retention sweeps do.
+
 ## Growth and retention
 
 Roughly one row per Claude Code API request. A handful of busy sessions produces
 tens of thousands of rows a week — small, but `raw_attributes` is the bulk of
-each row's size. Nothing prunes automatically. If the file gets unwieldy:
+each row's size.
 
-```sql
-DELETE FROM usage_events
- WHERE occurred_at < strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-180 days');
-VACUUM;
-```
+Two settings, both **off by default**, applied by the same 60-second sweep that
+purges empty sessions:
 
-Take a backup first, and note that this rewrites all-time totals on the summary
-cards.
+| Variable | What it does | Changes your numbers? |
+| --- | --- | --- |
+| `RAW_ATTRIBUTES_RETENTION_DAYS` | Nulls `raw_attributes` on older events | **No** — every aggregate is computed from the typed columns |
+| `RETENTION_DAYS` | Deletes older events, and sessions left empty by it | **Yes** — all-time totals shrink |
+
+Reach for the first one. It reclaims most of the space and costs you only the
+ability to recover an attribute that was never promoted to a column.
+
+Progress is reported by `GET /api/maintenance`. `VACUUM` is not run
+automatically — it needs exclusive access and temporarily doubles the file
+size, so run it by hand during a quiet period if you want the space returned to
+the filesystem rather than reused.

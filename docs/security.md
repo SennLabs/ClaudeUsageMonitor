@@ -79,9 +79,13 @@ log — don't bill anyone off it without a second source. (Retried batches *are*
 de-duplicated as of 2026-09-10, but that guards against accidental
 double-counting, not against a client that lies.)
 
-**`StrictHostKeyChecking=no` in rsync backups.** Unattended backup accepts the
-NAS's host key without verification, which is a LAN-appropriate trade. Across an
-untrusted network, pre-populate a `known_hosts` file and drop the flag.
+**Backup host key verification is opt-in.** Set `BACKUP_SSH_KNOWN_HOSTS` to a
+mounted `known_hosts` file and the connection is verified. Leave it unset and
+`StrictHostKeyChecking=no` applies — worse than trust-on-first-use, because
+`known_hosts` would be written to the container's writable layer and destroyed
+on every recreate, so there is no pinning at all. `/api/backup/status` carries
+a warning while it is unset. What a spoofer gets is the whole usage database;
+not the private key, which never leaves the client.
 
 ## Handling the token
 
@@ -123,14 +127,20 @@ Beyond that:
 
 - [ ] Set `INGEST_AUTH_TOKEN` to a high-entropy random value — always
 - [ ] Verify it took effect: an unauthenticated `/api/summary` must return 401
-- [ ] Firewall 9585 to the subnets your dev containers actually live on
-- [ ] Firewall 9595 to your office/VPN range
+- [ ] Bind the published ports to one interface — `"192.168.1.50:9585:8000"`.
+      A `ufw deny` will **not** work: Docker's rules sit ahead of the INPUT chain.
+- [ ] Or add rules to the `DOCKER-USER` chain, which is consulted
 - [ ] Terminate TLS in front of both if traffic leaves a trusted LAN
 - [ ] Put SSO or basic auth in front of the dashboard if read access needs control
 - [x] ~~Tighten CORS~~ — removed entirely, 2026-09-10
 - [x] ~~Use `hmac.compare_digest`~~ — done, 2026-09-10
 - [x] ~~Warn at startup when no token is configured~~ — now refuses to start, 2026-09-10
 - [ ] Use a dedicated, restricted SSH key for backups — not your personal one
+- [x] ~~Verify the backup host key~~ — set `BACKUP_SSH_KNOWN_HOSTS`; the status
+      endpoint warns while it is unset
+- [x] ~~Drop capabilities and set resource limits~~ — done 2026-09-10
+- [ ] Run ingest as a non-root user (needs a `chown` first — see
+      [Deployment](deployment.md#container-hardening))
 - [ ] Verify backup destination permissions: snapshots are full copies of the data
 
 ## What is stored

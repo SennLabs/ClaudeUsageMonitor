@@ -100,13 +100,32 @@ The ingest image already includes `rsync` and `openssh-client`.
 The SSH invocation is:
 
 ```
-ssh -i $BACKUP_SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes
+ssh -i $BACKUP_SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=no
 ```
 
-`BatchMode=yes` means it never prompts — a passphrase-protected key will simply
-fail. `StrictHostKeyChecking=no` accepts the host key without verification,
-which is a deliberate trade for unattended operation on a trusted LAN and is
-*not* appropriate across an untrusted network.
+`BatchMode=yes` means it never prompts — a passphrase-protected key simply
+fails.
+
+**Verify the host key.** Mount a `known_hosts` file and point
+`BACKUP_SSH_KNOWN_HOSTS` at it; the flags become
+`StrictHostKeyChecking=yes -o UserKnownHostsFile=<path>`:
+
+```yaml
+volumes:
+  - /home/youruser/.ssh/known_hosts:/run/secrets/known_hosts:ro
+```
+
+```dotenv
+BACKUP_SSH_KNOWN_HOSTS=/run/secrets/known_hosts
+```
+
+Without it the connection is accepted blind on every run — `known_hosts` would
+otherwise land in the container's writable layer and be destroyed on recreate,
+so there is not even trust-on-first-use to fall back on.
+`/api/backup/status` returns a warning while it is unset.
+
+Neither path may contain a space: rsync word-splits the `-e` argument, and the
+service now refuses to run rather than fail silently.
 
 Two things to know about rsync mode:
 

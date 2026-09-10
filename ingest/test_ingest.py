@@ -113,6 +113,13 @@ def make_payload(
     }
 
 
+def sessions_of(client) -> list:
+    """/api/sessions returns an envelope so callers can see when it is truncated."""
+    body = client.get("/api/sessions").json()
+    assert set(body) == {"total", "limit", "offset", "sessions"}, body
+    return body["sessions"]
+
+
 def _reset_db() -> None:
     """Drop the scratch database, including the WAL sidecars."""
     assert db_module.DB_PATH.parent == Path(_TMP_DIR), (
@@ -195,18 +202,18 @@ def test_user_project_mapping() -> None:
         assert resp.status_code == 200, resp.text
         assert resp.json()["sessions_updated"] == 1, resp.json()
 
-        sessions = client.get("/api/sessions").json()
+        sessions = sessions_of(client)
         assert sessions[0]["project_name"] == "billing-api", sessions
 
         # ...and to sessions that turn up later
         client.post("/v1/logs", json=make_payload("session-2", user_id="devcontainer-a"))
-        by_id = {s["session_id"]: s for s in client.get("/api/sessions").json()}
+        by_id = {s["session_id"]: s for s in sessions_of(client)}
         assert by_id["session-2"]["project_name"] == "billing-api", by_id
 
         # A hand-set label on one session survives further events from that user
         client.patch("/api/sessions/session-2", json={"project_name": "spike"})
         client.post("/v1/logs", json=make_payload("session-2", user_id="devcontainer-a"))
-        by_id = {s["session_id"]: s for s in client.get("/api/sessions").json()}
+        by_id = {s["session_id"]: s for s in sessions_of(client)}
         assert by_id["session-2"]["project_name"] == "spike", by_id
 
         users = client.get("/api/users").json()
@@ -220,7 +227,7 @@ def test_user_project_mapping() -> None:
         # Clearing the mapping unlabels that user's sessions
         cleared = client.put("/api/user-projects/devcontainer-a", json={"project_name": ""})
         assert cleared.status_code == 200, cleared.text
-        assert all(s["project_name"] is None for s in client.get("/api/sessions").json())
+        assert all(s["project_name"] is None for s in sessions_of(client))
 
     print("OK (user mapping) - retroactive, forward-applying, and clearable")
 
@@ -260,7 +267,7 @@ def test_purge_empty_sessions() -> None:
         removed = db_module.purge_empty_sessions()
         assert removed == 1, f"expected 1 purged, got {removed}"
 
-        remaining = {s["session_id"] for s in client.get("/api/sessions").json()}
+        remaining = {s["session_id"] for s in sessions_of(client)}
         assert remaining == {"empty-live", "used-old"}, remaining
 
         conn = sqlite3.connect(db_module.DB_PATH)
@@ -396,7 +403,7 @@ def test_malformed_records_do_not_lose_the_batch() -> None:
         resp = client.post("/v1/logs", json=payload)
         assert resp.status_code == 200, resp.text
 
-        ids = {s["session_id"] for s in client.get("/api/sessions").json()}
+        ids = {s["session_id"] for s in sessions_of(client)}
         assert {"good-1", "good-2"} <= ids, ids
 
     print("OK (partial batch) - good records committed, bad one dropped, no 500")
@@ -455,19 +462,19 @@ def test_project_from_resource_attribute() -> None:
     _reset_db()
     with TestClient(main_module.app) as client:
         client.post("/v1/logs", json=make_payload("rp-1", user_id="ctr-a", project="radiology-pacs"))
-        row = client.get("/api/sessions").json()[0]
+        row = sessions_of(client)[0]
         assert row["project_name"] == "radiology-pacs", row
         assert row["project_source"] == "resource", row
 
         # The identity can churn — a rebuilt container reports a new user.id —
         # and attribution still lands, which is the whole point.
         client.post("/v1/logs", json=make_payload("rp-2", user_id="ctr-a-rebuilt", project="radiology-pacs"))
-        by_id = {s["session_id"]: s for s in client.get("/api/sessions").json()}
+        by_id = {s["session_id"]: s for s in sessions_of(client)}
         assert by_id["rp-2"]["project_name"] == "radiology-pacs", by_id
 
         # Re-pointing the container relabels its in-flight session
         client.post("/v1/logs", json=make_payload("rp-1", user_id="ctr-a", project="billing"))
-        by_id = {s["session_id"]: s for s in client.get("/api/sessions").json()}
+        by_id = {s["session_id"]: s for s in sessions_of(client)}
         assert by_id["rp-1"]["project_name"] == "billing", by_id
 
     print("OK (resource project) - container-declared project applied and kept current")
@@ -480,24 +487,24 @@ def test_project_precedence() -> None:
         # user_map fills a gap when nothing else says otherwise
         client.post("/v1/logs", json=make_payload("pp-1", user_id="ctr-b"))
         client.put("/api/user-projects/ctr-b", json={"project_name": "from-mapping"})
-        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-1"]
+        row = {s["session_id"]: s for s in sessions_of(client)}["pp-1"]
         assert (row["project_name"], row["project_source"]) == ("from-mapping", "user_map"), row
 
         # resource beats user_map
         client.post("/v1/logs", json=make_payload("pp-1", user_id="ctr-b", project="from-container"))
-        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-1"]
+        row = {s["session_id"]: s for s in sessions_of(client)}["pp-1"]
         assert (row["project_name"], row["project_source"]) == ("from-container", "resource"), row
 
         # manual beats resource, and survives further events
         client.patch("/api/sessions/pp-1", json={"project_name": "by-hand"})
         client.post("/v1/logs", json=make_payload("pp-1", user_id="ctr-b", project="from-container"))
-        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-1"]
+        row = {s["session_id"]: s for s in sessions_of(client)}["pp-1"]
         assert (row["project_name"], row["project_source"]) == ("by-hand", "manual"), row
 
         # a user mapping must not clobber a container-declared project
         client.post("/v1/logs", json=make_payload("pp-2", user_id="ctr-b", project="from-container"))
         client.put("/api/user-projects/ctr-b", json={"project_name": "remapped"})
-        row = {s["session_id"]: s for s in client.get("/api/sessions").json()}["pp-2"]
+        row = {s["session_id"]: s for s in sessions_of(client)}["pp-2"]
         assert row["project_name"] == "from-container", row
 
     print("OK (precedence) - manual > resource > user_map, source recorded on each")
@@ -635,7 +642,7 @@ def test_unattributed_events_are_reported() -> None:
         client.post("/v1/logs", json=make_payload(None, cost_usd=9.0))
 
         summary = client.get("/api/summary").json()
-        per_session = sum(s["cost_usd"] for s in client.get("/api/sessions").json())
+        per_session = sum(s["cost_usd"] for s in sessions_of(client))
         assert summary["total_cost_usd"] == 10.0, summary
         assert per_session == 1.0, per_session
         assert summary["unattributed_events"] == 1, summary
@@ -721,6 +728,76 @@ def test_backup_configuration_guards() -> None:
     print("OK (backup config) - bad configs disabled or failed loudly, retention applied")
 
 
+
+def test_retention_and_maintenance() -> None:
+    """Retention trims history; the sweep's state is observable."""
+    import app.db as _db
+    _reset_db()
+    saved = (_db.RETENTION_DAYS, _db.RAW_ATTRIBUTES_RETENTION_DAYS)
+    try:
+        with TestClient(main_module.app) as client:
+            client.post("/v1/logs", json=make_payload("keep-1", cost_usd=1.0))
+            client.post("/v1/logs", json=make_payload("old-1", age_seconds=200 * 86400, cost_usd=2.0))
+            client.post("/v1/logs", json=make_payload("mid-1", age_seconds=40 * 86400, cost_usd=3.0))
+
+            # Clearing raw_attributes must not move a single number
+            _db.RAW_ATTRIBUTES_RETENTION_DAYS, _db.RETENTION_DAYS = 30, 0
+            before = client.get("/api/summary").json()["total_cost_usd"]
+            result = _db.apply_retention()
+            assert result["attributes_cleared"] == 2, result
+            assert client.get("/api/summary").json()["total_cost_usd"] == before
+
+            # Deleting events does change history, which is why it is opt-in
+            _db.RETENTION_DAYS = 90
+            result = _db.apply_retention()
+            assert result["events_deleted"] == 1, result
+            assert client.get("/api/summary").json()["total_cost_usd"] == 4.0
+            assert "old-1" not in {s["session_id"] for s in sessions_of(client)}
+
+            state = client.get("/api/maintenance").json()
+            assert state["retention_days"] == 90, state
+            assert set(state) >= {"last_run_at", "last_ok", "last_error", "sessions_purged"}, state
+    finally:
+        _db.RETENTION_DAYS, _db.RAW_ATTRIBUTES_RETENTION_DAYS = saved
+
+    print("OK (retention) - attributes cleared without changing totals, deletion opt-in")
+
+
+def test_sessions_pagination() -> None:
+    """The list is capped, and callers can tell that it is."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        for i in range(7):
+            client.post("/v1/logs", json=make_payload(f"pg-{i}", age_seconds=i * 60))
+
+        body = client.get("/api/sessions?limit=3").json()
+        assert body["total"] == 7 and len(body["sessions"]) == 3, body
+
+        page2 = client.get("/api/sessions?limit=3&offset=3").json()
+        assert page2["offset"] == 3 and len(page2["sessions"]) == 3, page2
+        first = {s["session_id"] for s in body["sessions"]}
+        assert first.isdisjoint({s["session_id"] for s in page2["sessions"]}), "pages overlap"
+
+    print("OK (pagination) - total reported, offset returns a distinct page")
+
+
+def test_healthz_checks_the_database() -> None:
+    """A static 200 reported healthy while the database was unusable."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        assert client.get("/healthz").status_code == 200
+
+        original = db_module.DB_PATH
+        db_module.DB_PATH = Path(_TMP_DIR) / "no-such-dir" / "missing.db"
+        try:
+            assert client.get("/healthz").status_code == 503
+        finally:
+            db_module.DB_PATH = original
+        assert client.get("/healthz").status_code == 200
+
+    print("OK (healthz) - reports 503 when the database is unreachable")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -740,6 +817,9 @@ def main() -> None:
     test_promoted_attributes_are_queryable()
     test_errors_and_tools_views()
     test_unattributed_events_are_reported()
+    test_retention_and_maintenance()
+    test_sessions_pagination()
+    test_healthz_checks_the_database()
     test_backup_configuration_guards()
     test_no_cors_headers()
     test_docs_endpoints_disabled()

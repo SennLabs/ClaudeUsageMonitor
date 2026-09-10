@@ -15,7 +15,7 @@ item — this is a list of options, not a plan of record.
 
 - [x] [R0. Attribute projects with `OTEL_RESOURCE_ATTRIBUTES` instead of mapping user IDs](#r0-attribute-projects-with-otel_resource_attributes-instead-of-mapping-user-ids) — *done*
 - [x] [R1. Move settings server-side](#r1-move-settings-server-side) — *done*
-- [ ] [R2. Retention and daily rollups](#r2-retention-and-daily-rollups)
+- [ ] [R2. Retention and daily rollups](#r2-retention-and-daily-rollups) — *partial*
 - [ ] [R3. Surface cache efficiency](#r3-surface-cache-efficiency)
 - [x] [R4. Event de-duplication](#r4-event-de-duplication) — *done*
 
@@ -46,7 +46,7 @@ item — this is a list of options, not a plan of record.
 
 - [ ] [R11. Continuous integration](#r11-continuous-integration)
 - [ ] [R12. Pin dependencies and base images](#r12-pin-dependencies-and-base-images)
-- [ ] [R13. Turn on TypeScript strict mode, and add frontend tests](#r13-turn-on-typescript-strict-mode-and-add-frontend-tests)
+- [ ] [R13. Turn on TypeScript strict mode, and add frontend tests](#r13-turn-on-typescript-strict-mode-and-add-frontend-tests) — *partial*
 - [ ] [R14. Adopt pytest, and stop the tests eating the dev database](#r14-adopt-pytest-and-stop-the-tests-eating-the-dev-database)
 - [x] [R15. Ship an example client configuration](#r15-ship-an-example-client-configuration) — *done*
 - [ ] [R16. Add a LICENSE](#r16-add-a-license)
@@ -117,6 +117,10 @@ consistently rather than per-browser. Configure the wall tablet from your desk.
 first load and seed the server from it, so nobody loses their configuration.
 
 ### R2. Retention and daily rollups
+
+*Status: **partial**.*
+
+**Retention done 2026-09-10.** `RAW_ATTRIBUTES_RETENTION_DAYS` and `RETENTION_DAYS`, applied by the maintenance sweep, both off by default. Daily rollups are still outstanding, and remain the part that keeps all-time queries flat as the table grows.
 
 **Problem.** Nothing ever deletes a `usage_events` row, and `raw_attributes`
 (the full JSON attribute map of every record) is the bulk of each row's size.
@@ -447,6 +451,10 @@ no record of what changed. Pin exact versions (ideally with hashes) and pin base
 images by digest. See [known issue 21](known-issues.md#21-container-and-deployment-hardening).
 
 ### R13. Turn on TypeScript strict mode, and add frontend tests
+
+*Status: **partial**.*
+
+**Strict mode done 2026-09-10** — zero errors on a forced rebuild. Frontend tests are still absent.
 
 `strict` is off ([known issue 29](known-issues.md#29-typescript-strict-is-off)).
 Turning it on will surface real null-handling gaps, particularly around the

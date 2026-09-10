@@ -3,6 +3,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -47,14 +48,44 @@ if not AUTH_TOKEN and not ALLOW_ANONYMOUS:
 PURGE_INTERVAL_SECONDS = 60
 
 
-async def _purge_loop() -> None:
+# Observable state for the maintenance loop. A blanket `except` that only logs
+# means a systematically failing sweep is invisible; this is reported by
+# /api/maintenance so it can be noticed.
+_maintenance: dict = {
+    "last_run_at": None,
+    "last_ok": None,
+    "last_error": None,
+    "sessions_purged": 0,
+    "attributes_cleared": 0,
+    "events_deleted": 0,
+}
+
+
+async def _maintenance_loop() -> None:
     while True:
         try:
             removed = await asyncio.to_thread(db.purge_empty_sessions)
             if removed:
                 log.info("Purged %d empty inactive session(s)", removed)
+            retention = await asyncio.to_thread(db.apply_retention)
+            if retention["attributes_cleared"] or retention["events_deleted"]:
+                log.info(
+                    "Retention: cleared attributes on %d event(s), deleted %d event(s)",
+                    retention["attributes_cleared"],
+                    retention["events_deleted"],
+                )
+            _maintenance.update(
+                last_ok=True,
+                last_error=None,
+                sessions_purged=_maintenance["sessions_purged"] + removed,
+                attributes_cleared=_maintenance["attributes_cleared"] + retention["attributes_cleared"],
+                events_deleted=_maintenance["events_deleted"] + retention["events_deleted"],
+            )
         except Exception as exc:  # never let cleanup kill the loop
-            log.warning("Empty-session purge failed: %s", exc)
+            _maintenance.update(last_ok=False, last_error=str(exc))
+            log.warning("Maintenance sweep failed: %s", exc)
+        finally:
+            _maintenance["last_run_at"] = datetime.now(timezone.utc).isoformat()
         await asyncio.sleep(PURGE_INTERVAL_SECONDS)
 
 
@@ -67,12 +98,17 @@ async def lifespan(app: FastAPI):
             "anything that can reach this port."
         )
     db.init_db()
-    tasks = [asyncio.create_task(_purge_loop())]
+    tasks = [asyncio.create_task(_maintenance_loop())]
     if backup.ENABLED:
         tasks.append(asyncio.create_task(backup.start_scheduler(db.DB_PATH)))
+    elif backup.CONFIG_ERROR:
+        log.error("Backups are DISABLED: %s", backup.CONFIG_ERROR)
     yield
     for task in tasks:
         task.cancel()
+    # Await the cancellations, so the process cannot exit while a backup
+    # thread is mid-copy.
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(
@@ -149,6 +185,18 @@ async def ingest_logs(request: Request):
 
 @app.get("/healthz")
 async def healthz():
+    """
+    Unauthenticated, for container and external probes.
+
+    It touches the database deliberately: a static 200 reported healthy while
+    the file was locked, corrupt or on a full disk, which are exactly the
+    situations a health check exists to catch.
+    """
+    try:
+        await asyncio.to_thread(db.ping)
+    except Exception as exc:
+        log.error("Health check failed: %s", exc)
+        raise HTTPException(status_code=503, detail=f"database unavailable: {exc}")
     return {"status": "ok"}
 
 
@@ -158,8 +206,18 @@ async def get_summary():
 
 
 @app.get("/api/sessions", dependencies=[Depends(require_auth)])
-async def get_sessions():
-    return db.fetch_sessions()
+async def get_sessions(limit: int = 100, offset: int = 0):
+    """
+    Sessions, newest first.
+
+    `total` lets a caller tell that the list is truncated. Without it the
+    per-project totals computed from this list silently disagreed with the
+    all-time summary once there were more than 100 sessions.
+    """
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    rows = db.fetch_sessions(limit=limit, offset=offset)
+    return {"total": db.count_sessions(), "limit": limit, "offset": offset, "sessions": rows}
 
 
 @app.get("/api/usage-by-model", dependencies=[Depends(require_auth)])
@@ -250,6 +308,18 @@ async def get_errors(hours: int = 24):
 @app.get("/api/tools", dependencies=[Depends(require_auth)])
 async def get_tools(hours: int = 24):
     return db.fetch_tool_stats(hours=_window(hours))
+
+
+@app.get("/api/maintenance", dependencies=[Depends(require_auth)])
+async def get_maintenance():
+    """State of the background sweep, so a persistent failure is visible."""
+    return {
+        **_maintenance,
+        "interval_seconds": PURGE_INTERVAL_SECONDS,
+        "active_window_minutes": db.ACTIVE_WINDOW_MINUTES,
+        "retention_days": db.RETENTION_DAYS or None,
+        "raw_attributes_retention_days": db.RAW_ATTRIBUTES_RETENTION_DAYS or None,
+    }
 
 
 @app.get("/api/fleet", dependencies=[Depends(require_auth)])

@@ -200,9 +200,8 @@ dict in a REPL and inspect the `LogEvent` list without touching the database.
 
 Python: standard library plus FastAPI, type hints throughout, module-level
 constants read from the environment at import time. Frontend: TypeScript
-checked with `tsc -b`, though `strict` is **not** enabled — see
-[known issue 29](known-issues.md#29-typescript-strict-is-off). No lint config in
-the repo; match what's around you.
+strict, checked with `tsc -b`. No lint config in the repo; match what's around
+you.
 
 Comments in this codebase explain *why*, not *what* (see the notes on WAL mode,
 attribute aliases, and the pre-paint theme script). Follow that.

@@ -58,7 +58,7 @@ export default function TabletDashboard() {
   const [countdown, setCountdown] = createSignal(5)
 
   const [summary, { refetch: refetchSummary }] = createResource(fetchSummary)
-  const [sessions, { refetch: refetchSessions }] = createResource(fetchSessions)
+  const [sessions, { refetch: refetchSessions }] = createResource(() => fetchSessions())
   const [budgetUsage, { refetch: refetchBudget }] = createResource(fetchBudget)
   const [spendRate, { refetch: refetchRate }] = createResource(fetchSpendRate)
   const [usageTime, { refetch: refetchTime }] = createResource(activeWindow, (w) =>
@@ -109,7 +109,7 @@ export default function TabletDashboard() {
   })
 
   const activeSessions = createMemo(() =>
-    (latest(sessions) ?? []).filter((s) =>
+    (latest(sessions)?.sessions ?? []).filter((s) =>
       isActive(s.last_seen_at, settings().activeSessionWindowMin),
     ),
   )
@@ -154,7 +154,7 @@ export default function TabletDashboard() {
   // would have rebuilt the whole list on every poll.
   const projectMap = createMemo(() => {
     const map = new Map<string, { cost: number; active: number; sessions: number }>()
-    for (const s of latest(sessions) ?? []) {
+    for (const s of latest(sessions)?.sessions ?? []) {
       const key = s.project_name ?? '(untagged)'
       const cur = map.get(key) ?? { cost: 0, active: 0, sessions: 0 }
       map.set(key, {

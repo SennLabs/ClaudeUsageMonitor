@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 # primary job — but it is never silently treated as working.
 DESTINATION = os.environ.get("BACKUP_DESTINATION", "").strip()
 SSH_KEY = os.environ.get("BACKUP_SSH_KEY", "").strip()
+SSH_KNOWN_HOSTS = os.environ.get("BACKUP_SSH_KNOWN_HOSTS", "").strip()
 MODE = os.environ.get("BACKUP_MODE", "").strip().lower()  # "", "local", "rsync"
 
 # user@host:/path — deliberately strict. The old heuristic was `"@" in dest and
@@ -123,7 +124,26 @@ def _prune_local(dest_dir: Path) -> None:
 def _rsync(src: Path) -> None:
     cmd = ["rsync", "-az", "--no-implied-dirs"]
     if SSH_KEY:
-        cmd += ["-e", f"ssh -i {SSH_KEY} -o StrictHostKeyChecking=no -o BatchMode=yes"]
+        ssh = ["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes"]
+        if SSH_KNOWN_HOSTS:
+            # Verified host key. Without this the connection is accepted blind
+            # every time: known_hosts lands in the container's writable layer
+            # and is destroyed on recreate, so there is not even
+            # trust-on-first-use pinning to fall back on.
+            ssh += [
+                "-o", "StrictHostKeyChecking=yes",
+                "-o", f"UserKnownHostsFile={SSH_KNOWN_HOSTS}",
+            ]
+        else:
+            ssh += ["-o", "StrictHostKeyChecking=no"]
+        # rsync re-splits this string on whitespace, so a path containing a
+        # space would break it silently.
+        if any(" " in part for part in ssh):
+            raise RuntimeError(
+                "BACKUP_SSH_KEY / BACKUP_SSH_KNOWN_HOSTS must not contain spaces — "
+                "rsync word-splits the -e argument."
+            )
+        cmd += ["-e", " ".join(ssh)]
     cmd += ["--", str(src), DESTINATION]  # -- so a destination starting with - is a path
     # start_new_session puts rsync and the ssh child it spawns in their own
     # process group, so a timeout kills both. Killing rsync alone leaves ssh
@@ -250,6 +270,13 @@ async def start_scheduler(db_path: Path) -> None:
 
 def status() -> dict:
     warnings = []
+    if ENABLED and RESOLVED_MODE == "rsync" and not SSH_KNOWN_HOSTS:
+        warnings.append(
+            "Host key verification is off (StrictHostKeyChecking=no). Set "
+            "BACKUP_SSH_KNOWN_HOSTS to a mounted known_hosts file to verify the "
+            "destination — otherwise anyone who can spoof it on the LAN receives "
+            "the whole usage database."
+        )
     if ENABLED and RESOLVED_MODE == "rsync":
         warnings.append(
             "BACKUP_KEEP does not apply to rsync destinations — nothing prunes the "

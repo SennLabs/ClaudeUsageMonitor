@@ -45,20 +45,20 @@ single-instance internal tool on a private network.
 - [x] [17. `/tablet` in light theme has invisible chart axes](#17-tablet-in-light-theme-has-invisible-chart-axes) — *fixed*
 - [x] [18. Empty `INGEST_AUTH_TOKEN` silently disables all authentication](#18-empty-ingest_auth_token-silently-disables-all-authentication) — *fixed*
 - [x] [19. `/docs`, `/redoc` and `/openapi.json` are unauthenticated](#19-docs-redoc-and-openapijson-are-unauthenticated) — *fixed*
-- [ ] [20. No body-size cap on `POST /v1/logs`, and no retention policy](#20-no-body-size-cap-on-post-v1logs-and-no-retention-policy) — *reported*
-- [ ] [21. Container and deployment hardening](#21-container-and-deployment-hardening) — *reported*
-- [ ] [22. Healthchecks pass in the situations that actually break the system](#22-healthchecks-pass-in-the-situations-that-actually-break-the-system) — *reported*
+- [x] [20. No body-size cap on `POST /v1/logs`, and no retention policy](#20-no-body-size-cap-on-post-v1logs-and-no-retention-policy) — *fixed*
+- [ ] [21. Container and deployment hardening](#21-container-and-deployment-hardening) — *partial*
+- [ ] [22. Healthchecks pass in the situations that actually break the system](#22-healthchecks-pass-in-the-situations-that-actually-break-the-system) — *partial*
 - [x] [23. `test_ingest.py` deletes the development database](#23-test_ingestpy-deletes-the-development-database) — *fixed*
 
 **P3 — worth doing**
 
-- [ ] [24. `/api/sessions` is a hard `LIMIT 100` with no pagination](#24-apisessions-is-a-hard-limit-100-with-no-pagination) — *reported*
-- [ ] [25. Data-quality gaps in the OTLP parser](#25-data-quality-gaps-in-the-otlp-parser) — *reported*
-- [ ] [26. Robustness details in the purge and shutdown paths](#26-robustness-details-in-the-purge-and-shutdown-paths) — *reported*
+- [x] [24. `/api/sessions` is a hard `LIMIT 100` with no pagination](#24-apisessions-is-a-hard-limit-100-with-no-pagination) — *fixed*
+- [x] [25. Data-quality gaps in the OTLP parser](#25-data-quality-gaps-in-the-otlp-parser) — *fixed*
+- [x] [26. Robustness details in the purge and shutdown paths](#26-robustness-details-in-the-purge-and-shutdown-paths) — *fixed*
 - [x] [27. Settings and formatting papercuts](#27-settings-and-formatting-papercuts) — *fixed*
-- [x] [28. Touch and kiosk ergonomics on `/tablet`](#28-touch-and-kiosk-ergonomics-on-tablet) — *fixed*
-- [ ] [29. TypeScript `strict` is off](#29-typescript-strict-is-off) — *verified*
-- [ ] [30. Backup SSH trust and argument quoting](#30-backup-ssh-trust-and-argument-quoting) — *reported*
+- [ ] [28. Touch and kiosk ergonomics on `/tablet`](#28-touch-and-kiosk-ergonomics-on-tablet) — *partial*
+- [x] [29. TypeScript `strict` is off](#29-typescript-strict-is-off) — *fixed*
+- [x] [30. Backup SSH trust and argument quoting](#30-backup-ssh-trust-and-argument-quoting) — *fixed*
 
 **D. Documentation corrections**
 
@@ -485,7 +485,9 @@ by nginx, but it is one line to close:
 
 ### 20. No body-size cap on `POST /v1/logs`, and no retention policy
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** The body cap landed in Batch 3 (413 above `MAX_LOG_BODY_BYTES`). Retention is now two settings applied by the maintenance sweep: `RAW_ATTRIBUTES_RETENTION_DAYS` nulls the JSON blob on older events without moving a single displayed number, and `RETENTION_DAYS` deletes them outright. Both default to off, and only the second changes history. Regression test `test_retention_and_maintenance`.
 
 `main.py:70` — `await request.json()` buffers the whole body; uvicorn imposes no
 limit and `/v1/logs` is not proxied through nginx, so nginx's
@@ -498,7 +500,9 @@ R2; the size cap should be done here.
 
 ### 21. Container and deployment hardening
 
-*Status: **reported**.*
+*Status: **partial**.*
+
+**Mostly fixed 2026-09-10.** `cap_drop: [ALL]`, `no-new-privileges`, `mem_limit` and `pids_limit` are on by default because none of them can break a bind mount; dependencies are pinned to exact versions; nginx moved to 1.29-alpine. Two items are documented rather than applied, because both need deployment-specific detail I cannot supply from here: running as non-root needs a `chown` of the existing `./usage-data` first, and binding the ports to one interface needs your actual LAN address. Both have exact steps in [Deployment](deployment.md#container-hardening).
 
 - Both containers run as **root**. The ingest container is the one that matters:
   the backup SSH key and the database bind mount are both there. No
@@ -513,7 +517,9 @@ R2; the size cap should be done here.
 
 ### 22. Healthchecks pass in the situations that actually break the system
 
-*Status: **reported**.*
+*Status: **partial**.*
+
+**Mostly fixed 2026-09-10.** `/healthz` now runs a `SELECT 1` and returns 503 when the database is unreachable; the dashboard healthcheck fetches `/api/summary` through the proxy rather than a static file, so a token mismatch or a dead ingest marks it unhealthy; `depends_on` waits for `service_healthy`. The nginx upstream-IP caching is **not** fixed — a variable `proxy_pass` changes URI handling and I cannot build an image here to test it; recreate both services together, as [Applying configuration changes](deployment.md#applying-configuration-changes) already says.
 
 - `/healthz` returns a static dict and never touches SQLite: a locked, corrupt
   or full-disk database reports healthy. Add a `SELECT 1`.
@@ -545,7 +551,9 @@ only `main`).
 
 ### 24. `/api/sessions` is a hard `LIMIT 100` with no pagination
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** The endpoint takes `limit` (1–500) and `offset`, and returns an envelope with `total`. **Breaking response-shape change** — it was a bare array. The table now says when it is showing a subset, so the per-project totals no longer disagree silently with the summary cards. Regression test `test_sessions_pagination`.
 
 `db.py:278`. The grouped-by-project totals in `SessionsTable` and
 `TabletDashboard` are computed from that truncated list, while `SummaryCards`
@@ -554,7 +562,9 @@ you pass 100 sessions.
 
 ### 25. Data-quality gaps in the OTLP parser
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** The `timeUnixNano: "0"` and non-numeric `cost_usd` cases were fixed in Batch 3; `PRAGMA foreign_keys = ON` is now set on every connection, so the declared reference is enforced rather than decorative.
 
 - `otlp.py:79` — `timeUnixNano: "0"` (the *string*) passes the falsy guard and
   becomes `1970-01-01`, pinning `first_seen_at` and hiding the event from every
@@ -567,7 +577,9 @@ you pass 100 sessions.
 
 ### 26. Robustness details in the purge and shutdown paths
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `IN (...)` chunking and `busy_timeout` landed in Batch 3. The loop now records its outcome and `GET /api/maintenance` exposes it, so a systematically failing sweep is visible rather than only logged at a level nobody greps. Lifespan tasks are awaited after cancellation, so the process cannot exit mid-backup.
 
 - `db.py:156` builds an unbounded `IN (?,?,…)` list. This build's SQLite limit is
   250 000 so it will not fire today, but if it ever does, `_purge_loop` swallows
@@ -602,7 +614,7 @@ you pass 100 sessions.
 
 ### 28. Touch and kiosk ergonomics on `/tablet`
 
-*Status: **fixed**.*
+*Status: **partial**.*
 
 **Partly fixed 2026-09-10.** The chart uses pointer events rather than mouse-only handlers, so it responds to touch, and both dashboards refetch on `visibilitychange` so a slept tablet catches up immediately instead of showing stale data behind a live-looking countdown. Tap target sizing is still untouched.
 
@@ -614,7 +626,9 @@ were live.
 
 ### 29. TypeScript `strict` is off
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Enabled in `tsconfig.app.json`; a forced full rebuild produces zero errors. It cost nothing because the `resource.ts` work in Batch 1 had already removed the null-handling gaps strict would have caught.
 
 `dashboard/tsconfig.app.json` never sets `"strict"` or `strictNullChecks` — only
 `noUnusedLocals`, `noUnusedParameters`, `erasableSyntaxOnly` and
@@ -623,7 +637,9 @@ it on will surface real null-handling gaps around the resource accessors.
 
 ### 30. Backup SSH trust and argument quoting
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `--` before the paths and the process-group kill landed in Batch 7. `BACKUP_SSH_KNOWN_HOSTS` now enables real host key verification, and the status endpoint warns while it is unset. A key or known_hosts path containing a space is rejected outright rather than silently word-split by rsync.
 
 - `backup.py:63` — `StrictHostKeyChecking=no` is a defensible LAN trade, but
   `known_hosts` is written to the container's writable layer and destroyed on
