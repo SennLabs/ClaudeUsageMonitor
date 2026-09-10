@@ -4,15 +4,26 @@ SQLite, and verifies the optional bearer-token auth gate.
 Run with: python3 test_ingest.py
 """
 
+import atexit
 import importlib
 import os
+import shutil
 import sqlite3
+import tempfile
 import time
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-import app.db as db_module
-import app.main as main_module
+# Point the suite at a scratch database BEFORE importing app.db, which resolves
+# DB_PATH once at import time. Without this the tests delete ingest/usage.db —
+# the same file local development writes to — on every run.
+_TMP_DIR = tempfile.mkdtemp(prefix="claude-usage-tests-")
+os.environ["DB_PATH"] = str(Path(_TMP_DIR) / "test_usage.db")
+atexit.register(shutil.rmtree, _TMP_DIR, True)
+
+import app.db as db_module  # noqa: E402  (must follow the DB_PATH assignment)
+import app.main as main_module  # noqa: E402
 
 SAMPLE_PAYLOAD = {
     "resourceLogs": [
@@ -89,8 +100,14 @@ def make_payload(
 
 
 def _reset_db() -> None:
-    if db_module.DB_PATH.exists():
-        db_module.DB_PATH.unlink()
+    """Drop the scratch database, including the WAL sidecars."""
+    assert db_module.DB_PATH.parent == Path(_TMP_DIR), (
+        f"refusing to delete {db_module.DB_PATH} — tests must run against the scratch DB"
+    )
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(str(db_module.DB_PATH) + suffix)
+        if path.exists():
+            path.unlink()
 
 
 def test_ingest_without_auth() -> None:
@@ -269,6 +286,7 @@ def test_time_windows() -> None:
 
 
 def main() -> None:
+    print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
     test_auth_gating()
     test_user_project_mapping()

@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, Show } from 'solid-js'
 import type { SessionRow } from '../api'
 import { updateSessionProject } from '../api'
 import { formatCost, formatNumber, formatTime } from '../format'
+import { errorMessage } from '../resource'
 
 const ACTIVE_WINDOW_MS = 15 * 60 * 1000
 
@@ -142,6 +143,7 @@ export default function SessionsTable(props: {
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [editValue, setEditValue] = createSignal('')
   const [saving, setSaving] = createSignal(false)
+  const [saveError, setSaveError] = createSignal<string | null>(null)
 
   function startEdit(session: SessionRow) {
     const current = projectNames()[session.session_id] ?? session.project_name
@@ -153,18 +155,24 @@ export default function SessionsTable(props: {
     const id = editingId()
     if (!id) return
     setSaving(true)
+    setSaveError(null)
     try {
       const name = editValue().trim() || null
       await updateSessionProject(id, name)
       setProjectNames((prev) => ({ ...prev, [id]: name }))
+      setEditingId(null)
+    } catch (e) {
+      // Stay in edit state so the typed value survives — closing the input on
+      // failure looks identical to a successful save and loses the edit.
+      setSaveError(errorMessage(e))
     } finally {
       setSaving(false)
-      setEditingId(null)
     }
   }
 
   function cancelEdit() {
     setEditingId(null)
+    setSaveError(null)
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -187,6 +195,13 @@ export default function SessionsTable(props: {
       when={!props.groupByProject}
       fallback={<GroupedTable sessions={mergedSessions()} />}
     >
+      <Show when={saveError()}>
+        {(msg) => (
+          <div class="mb-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+            Couldn't save the project tag: {msg()}
+          </div>
+        )}
+      </Show>
       <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
         <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
           <thead class="bg-slate-50 dark:bg-slate-900">

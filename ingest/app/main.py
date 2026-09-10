@@ -11,6 +11,17 @@ from pydantic import BaseModel
 from . import backup, db
 from .otlp import extract_log_events
 
+# uvicorn configures handlers for its own loggers but leaves the root logger
+# alone, so without this every log.info() in this package is dropped — the
+# backup scheduler, backup successes and the empty-session purge all report
+# nothing, and only failures are ever visible.
+logging.basicConfig(
+    level=logging.WARNING,  # keep third-party loggers (httpx, asyncio) quiet
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S%z",
+)
+logging.getLogger("app").setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+
 log = logging.getLogger(__name__)
 
 AUTH_TOKEN = os.environ.get("INGEST_AUTH_TOKEN")

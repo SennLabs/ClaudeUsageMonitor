@@ -1,6 +1,7 @@
 import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { fetchSessions, fetchSummary, fetchUsageOverTime, fetchUsageOverTimeByProject } from '../api'
 import { formatCost, formatNumber } from '../format'
+import { errorMessage, firstError, latest } from '../resource'
 import { computeHourlyRate, loadSettings, WINDOW_HOURS, WINDOW_OPTIONS } from '../settings'
 import type { TimeWindow } from '../settings'
 import type { Metric } from './UsageChart'
@@ -80,10 +81,10 @@ export default function TabletDashboard() {
   const activeWindowMin = settings.activeSessionWindowMin
 
   const activeSessions = createMemo(() =>
-    (sessions() ?? []).filter((s) => isActive(s.last_seen_at, activeWindowMin)),
+    (latest(sessions) ?? []).filter((s) => isActive(s.last_seen_at, activeWindowMin)),
   )
 
-  const costRatePerHour = createMemo(() => computeHourlyRate(usageTime() ?? [], hours()))
+  const costRatePerHour = createMemo(() => computeHourlyRate(latest(usageTime) ?? [], hours()))
 
   const alertActive = createMemo(() => {
     const t = settings.costAlertThresholdPerHour
@@ -93,8 +94,9 @@ export default function TabletDashboard() {
   const budget = settings.monthlyBudget
 
   const usedFraction = createMemo(() => {
-    if (!budget || !summary()) return null
-    return Math.min(summary()!.total_cost_usd / budget, 1)
+    const s = latest(summary)
+    if (!budget || !s) return null
+    return Math.min(s.total_cost_usd / budget, 1)
   })
 
   const budgetBarColor = createMemo(() => {
@@ -106,13 +108,17 @@ export default function TabletDashboard() {
   })
 
   const totalTokens = createMemo(() =>
-    (summary()?.total_input_tokens ?? 0) + (summary()?.total_output_tokens ?? 0),
+    (latest(summary)?.total_input_tokens ?? 0) + (latest(summary)?.total_output_tokens ?? 0),
+  )
+
+  const apiError = createMemo(() =>
+    firstError(summary, sessions, usageTime, usageByProject),
   )
 
   const chartProps = createMemo(() =>
     groupBy() === 'project'
-      ? { projectData: usageByProject(), metric: metric(), hours: hours() }
-      : { data: usageTime(), metric: metric(), hours: hours() },
+      ? { projectData: latest(usageByProject), metric: metric(), hours: hours() }
+      : { data: latest(usageTime), metric: metric(), hours: hours() },
   )
 
   return (
@@ -195,7 +201,7 @@ export default function TabletDashboard() {
           label="Active sessions"
           value={String(activeSessions().length)}
           accent="text-emerald-400"
-          sub={`${summary()?.total_sessions ?? '—'} total`}
+          sub={`${latest(summary)?.total_sessions ?? '—'} total`}
         />
         <Show
           when={metric() === 'cost'}
@@ -206,13 +212,13 @@ export default function TabletDashboard() {
                 ? `${(totalTokens() / 1_000_000).toFixed(1)}M`
                 : `${(totalTokens() / 1_000).toFixed(0)}k`}
               accent="text-sky-400"
-              sub={`${formatNumber(summary()?.total_input_tokens ?? 0)} in · ${formatNumber(summary()?.total_output_tokens ?? 0)} out`}
+              sub={`${formatNumber(latest(summary)?.total_input_tokens ?? 0)} in · ${formatNumber(latest(summary)?.total_output_tokens ?? 0)} out`}
             />
           }
         >
           <StatCard
             label="Total spend"
-            value={summary() ? formatCost(summary()!.total_cost_usd) : '—'}
+            value={latest(summary) ? formatCost(latest(summary)!.total_cost_usd) : '—'}
             accent="text-sky-400"
             sub={`${formatNumber(totalTokens())} tokens`}
           />
@@ -234,7 +240,7 @@ export default function TabletDashboard() {
             <span class="text-xs font-medium text-slate-400">Monthly budget</span>
             <span class="text-xs text-slate-500">
               <Show when={usedFraction() !== null}>
-                {(usedFraction()! * 100).toFixed(1)}% · {formatCost(summary()?.total_cost_usd ?? 0)} of ${budget}
+                {(usedFraction()! * 100).toFixed(1)}% · {formatCost(latest(summary)?.total_cost_usd ?? 0)} of ${budget}
               </Show>
             </span>
           </div>
@@ -298,7 +304,7 @@ export default function TabletDashboard() {
           {(() => {
             const projectMap = createMemo(() => {
               const map = new Map<string, { cost: number; active: number; sessions: number }>()
-              for (const s of sessions() ?? []) {
+              for (const s of latest(sessions) ?? []) {
                 const key = s.project_name ?? '(untagged)'
                 const cur = map.get(key) ?? { cost: 0, active: 0, sessions: 0 }
                 map.set(key, {
@@ -345,11 +351,14 @@ export default function TabletDashboard() {
         </Show>
       </div>
 
-      {(summary.error || sessions.error) && (
-        <div class="fixed right-4 bottom-4 rounded-lg bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
-          Couldn't reach the usage API — is the backend running?
-        </div>
-      )}
+      <Show when={apiError()}>
+        {(err) => (
+          <div class="fixed right-4 bottom-4 max-w-sm rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg">
+            <p class="font-medium">Couldn't reach the usage API</p>
+            <p class="mt-0.5 text-red-100">{errorMessage(err())}</p>
+          </div>
+        )}
+      </Show>
     </div>
   )
 }

@@ -11,6 +11,7 @@ import SessionsTable from './components/SessionsTable'
 import SummaryCards from './components/SummaryCards'
 import ThemeToggle from './components/ThemeToggle'
 import UsageChart, { type Metric } from './components/UsageChart'
+import { errorMessage, firstError, latest } from './resource'
 import { computeHourlyRate, loadSettings, WINDOW_HOURS, WINDOW_OPTIONS } from './settings'
 import type { TimeWindow } from './settings'
 
@@ -74,7 +75,7 @@ export default function App() {
   onCleanup(() => clearInterval(timer))
 
   const costRatePerHour = createMemo(() =>
-    computeHourlyRate(usageOverTime() ?? [], hours()),
+    computeHourlyRate(latest(usageOverTime) ?? [], hours()),
   )
 
   const alertActive = createMemo(() => {
@@ -82,10 +83,14 @@ export default function App() {
     return t !== null && costRatePerHour() > t
   })
 
+  const apiError = createMemo(() =>
+    firstError(summary, sessions, usageByModel, usageOverTime, usageByProject),
+  )
+
   const chartProps = createMemo(() =>
     groupBy() === 'project'
-      ? { projectData: usageByProject(), metric: metric(), hours: hours() }
-      : { data: usageOverTime(), metric: metric(), hours: hours() },
+      ? { projectData: latest(usageByProject), metric: metric(), hours: hours() }
+      : { data: latest(usageOverTime), metric: metric(), hours: hours() },
   )
 
   return (
@@ -128,7 +133,7 @@ export default function App() {
 
       <main class="mx-auto max-w-6xl space-y-8 px-6 py-8">
         <section>
-          <SummaryCards summary={summary()} />
+          <SummaryCards summary={latest(summary)} />
         </section>
 
         <section>
@@ -171,22 +176,25 @@ export default function App() {
               onChange={setGroupBy}
             />
           </div>
-          <SessionsTable sessions={sessions()} groupByProject={groupBy() === 'project'} />
+          <SessionsTable sessions={latest(sessions)} groupByProject={groupBy() === 'project'} />
         </section>
 
         <section>
           <h2 class="mb-3 text-sm font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
             Usage by model
           </h2>
-          <ModelBreakdown usage={usageByModel()} />
+          <ModelBreakdown usage={latest(usageByModel)} />
         </section>
       </main>
 
-      {(summary.error || sessions.error || usageByModel.error) && (
-        <div class="fixed right-4 bottom-4 rounded-lg bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
-          Couldn't reach the usage API — is the backend running?
-        </div>
-      )}
+      <Show when={apiError()}>
+        {(err) => (
+          <div class="fixed right-4 bottom-4 max-w-sm rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg">
+            <p class="font-medium">Couldn't reach the usage API</p>
+            <p class="mt-0.5 text-red-100">{errorMessage(err())}</p>
+          </div>
+        )}
+      </Show>
     </div>
   )
 }

@@ -393,8 +393,11 @@ logic currently assumes they are not.
 
 There is no CI. A GitHub Actions job running `test_ingest.py` and
 `tsc -b && vite build` on every push would have caught several items in
-[Known issues](known-issues.md) before they landed. Cheapest high-value item on
-this page.
+[Known issues](known-issues.md) before they landed.
+
+**Deferred by decision (2026-09-10).** No GitHub Actions for now. Until this
+lands, both commands are run by hand before any change set is considered done —
+that is the only guard against regressions, so it is not optional.
 
 ### R12. Pin dependencies and base images
 

@@ -23,8 +23,8 @@ single-instance internal tool on a private network.
 **P1 — fix first**
 
 - [ ] [1. Model price overrides and the budget cycle are dead code](#1-model-price-overrides-and-the-budget-cycle-are-dead-code) — *verified*
-- [ ] [2. A failed API call renders no error at all](#2-a-failed-api-call-renders-no-error-at-all) — *verified*
-- [ ] [3. A failed project-tag save is swallowed silently](#3-a-failed-project-tag-save-is-swallowed-silently) — *verified*
+- [x] [2. A failed API call renders no error at all](#2-a-failed-api-call-renders-no-error-at-all) — *fixed*
+- [x] [3. A failed project-tag save is swallowed silently](#3-a-failed-project-tag-save-is-swallowed-silently) — *fixed*
 - [ ] [4. CORS `*` plus the token-injecting proxy makes port 9595 an open API](#4-cors--plus-the-token-injecting-proxy-makes-port-9595-an-open-api) — *verified*
 - [ ] [5. Ingest blocks its own event loop](#5-ingest-blocks-its-own-event-loop) — *verified*
 - [ ] [6. Batches are not atomic, so failures permanently inflate totals](#6-batches-are-not-atomic-so-failures-permanently-inflate-totals) — *verified*
@@ -35,7 +35,7 @@ single-instance internal tool on a private network.
 
 **P2 — should fix**
 
-- [ ] [10. `log.info` is never emitted](#10-loginfo-is-never-emitted) — *verified*
+- [x] [10. `log.info` is never emitted](#10-loginfo-is-never-emitted) — *fixed*
 - [ ] [11. `ACTIVE_WINDOW_MINUTES` is not passed through Compose](#11-active_window_minutes-is-not-passed-through-compose) — *verified*
 - [ ] [12. Three different "active session" windows](#12-three-different-active-session-windows) — *verified*
 - [ ] [13. Events with no `session.id` inflate the headline only](#13-events-with-no-sessionid-inflate-the-headline-only) — *verified*
@@ -48,7 +48,7 @@ single-instance internal tool on a private network.
 - [ ] [20. No body-size cap on `POST /v1/logs`, and no retention policy](#20-no-body-size-cap-on-post-v1logs-and-no-retention-policy) — *reported*
 - [ ] [21. Container and deployment hardening](#21-container-and-deployment-hardening) — *reported*
 - [ ] [22. Healthchecks pass in the situations that actually break the system](#22-healthchecks-pass-in-the-situations-that-actually-break-the-system) — *reported*
-- [ ] [23. `test_ingest.py` deletes the development database](#23-test_ingestpy-deletes-the-development-database) — *verified*
+- [x] [23. `test_ingest.py` deletes the development database](#23-test_ingestpy-deletes-the-development-database) — *fixed*
 
 **P3 — worth doing**
 
@@ -99,7 +99,9 @@ half-present. See also the doc corrections in section D.
 
 ### 2. A failed API call renders no error at all
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Added `dashboard/src/resource.ts` with `latest()` / `firstError()`; every resource read in `App.tsx`, `TabletDashboard.tsx` and `UsersPage.tsx` now checks `.error` before reading, and falls back to `.latest` so a failed refetch keeps the last good value on screen instead of blanking it. The banner now covers all five resources (was three) and shows the actual error text. An `ErrorBoundary` in `index.tsx` is a backstop for anything unhandled. Verified with a Solid repro: banner renders, no throw.
 
 Reading an errored `createResource` accessor **throws** in Solid
 (`solid-js/dist/solid.js:322`). In `App.tsx` the effect reading `summary()` is
@@ -123,7 +125,9 @@ today because it covers 0 in practice, but fix both.
 
 ### 3. A failed project-tag save is swallowed silently
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `commitEdit` in `SessionsTable.tsx` now catches, keeps the row in edit state so the typed value survives, and shows the error above the table — matching the pattern `UsersPage` already used.
 
 `dashboard/src/components/SessionsTable.tsx:152` — `commitEdit` is
 `try { … } finally { setEditingId(null) }` with no `catch`. A PATCH that 401s
@@ -297,7 +301,9 @@ it would collapse every project into one row.
 
 ### 10. `log.info` is never emitted
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `logging.basicConfig` in `main.py` installs a root handler at WARNING (so httpx and asyncio stay quiet) and the `app` logger is set from `LOG_LEVEL`, default INFO. Verified against a real uvicorn boot: "Backup scheduler started", "Purged N empty inactive session(s)" and "Backup succeeded" all now appear, so the `grep -i purge` diagnostic in [Troubleshooting](troubleshooting.md) works.
 
 There is no logging configuration anywhere in `ingest/`, so under uvicorn's
 default config `app.*` inherits an effective level of `WARNING`:
@@ -489,7 +495,9 @@ R2; the size cap should be done here.
 
 ### 23. `test_ingest.py` deletes the development database
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** The suite sets `DB_PATH` to a `tempfile.mkdtemp()` scratch database *before* importing `app.db` (which resolves it at import time), removes the directory via `atexit`, and `_reset_db` now asserts it is operating inside that directory before unlinking anything. It also clears the `-wal`/`-shm` sidecars, which were previously left behind.
 
 `_reset_db` unlinks `db_module.DB_PATH`, which defaults to `ingest/usage.db` —
 the exact file local development writes to — before every test. Both

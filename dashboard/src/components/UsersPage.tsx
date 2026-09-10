@@ -2,6 +2,7 @@ import { createMemo, createResource, createSignal, For, onCleanup, onMount, Show
 import type { UserRow } from '../api'
 import { fetchProjects, fetchUsers, setUserProject } from '../api'
 import { formatCost, formatNumber, formatTime } from '../format'
+import { errorMessage, firstError, latest } from '../resource'
 import { loadSettings } from '../settings'
 import ThemeToggle from './ThemeToggle'
 
@@ -71,7 +72,7 @@ export default function UsersPage() {
     if (e.key === 'Escape') setEditingId(null)
   }
 
-  const rows = createMemo(() => users() ?? [])
+  const rows = createMemo(() => latest(users) ?? [])
   const linkedCount = createMemo(() => rows().filter((u) => u.project_name).length)
 
   return (
@@ -261,15 +262,18 @@ export default function UsersPage() {
 
           {/* Autocomplete source for the project field */}
           <datalist id="known-projects">
-            <For each={projects() ?? []}>{(name) => <option value={name} />}</For>
+            <For each={latest(projects) ?? []}>{(name) => <option value={name} />}</For>
           </datalist>
         </div>
       </main>
 
-      <Show when={users.error}>
-        <div class="fixed right-4 bottom-4 rounded-lg bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
-          Couldn't reach the usage API — is the backend running?
-        </div>
+      <Show when={firstError(users, projects)}>
+        {(err) => (
+          <div class="fixed right-4 bottom-4 max-w-sm rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg">
+            <p class="font-medium">Couldn't reach the usage API</p>
+            <p class="mt-0.5 text-red-100">{errorMessage(err())}</p>
+          </div>
+        )}
       </Show>
     </div>
   )
