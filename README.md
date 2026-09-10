@@ -18,6 +18,7 @@ Full documentation lives in [`docs/`](docs/README.md):
 | [Dashboard guide](docs/dashboard.md) | The three views and their controls |
 | [Deployment](docs/deployment.md) · [Backup](docs/backup-and-restore.md) · [Security](docs/security.md) · [Troubleshooting](docs/troubleshooting.md) | Running it |
 | [Development](docs/development.md) | Repo layout, tests, extending it |
+| [Known issues](docs/known-issues.md) · [Roadmap](docs/roadmap.md) | Outstanding defects and proposed work |
 
 ## How it works
 

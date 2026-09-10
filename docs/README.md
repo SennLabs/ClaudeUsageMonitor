@@ -33,6 +33,17 @@ These pages are the detail behind it.
 | [Security](security.md) | The auth model, its limits, and hardening notes |
 | [Troubleshooting](troubleshooting.md) | Symptoms, causes, fixes |
 
+## Backlog
+
+| Page | What it covers |
+| --- | --- |
+| [Known issues](known-issues.md) | Confirmed defects awaiting a fix, ranked P1–P3, plus documentation corrections |
+| [Roadmap](roadmap.md) | Proposed enhancements and project hygiene, none started |
+
+Both are checklists. Items carry a verification status — **verified** means
+reproduced against the real code in-session; **reported** means found by review
+but not independently reproduced.
+
 ## Contributing
 
 | Page | What it covers |
