@@ -22,6 +22,10 @@ _TMP_DIR = tempfile.mkdtemp(prefix="claude-usage-tests-")
 os.environ["DB_PATH"] = str(Path(_TMP_DIR) / "test_usage.db")
 atexit.register(shutil.rmtree, _TMP_DIR, True)
 
+# Most tests exercise the unauthenticated path, which the app now refuses to
+# start in unless the operator opts in explicitly.
+os.environ["INGEST_ALLOW_ANONYMOUS"] = "1"
+
 import app.db as db_module  # noqa: E402  (must follow the DB_PATH assignment)
 import app.main as main_module  # noqa: E402
 
@@ -285,6 +289,57 @@ def test_time_windows() -> None:
     print("OK (windows) - 24h excludes 30h-old data, hours=0 returns all time")
 
 
+
+def test_no_cors_headers() -> None:
+    """
+    The API must not advertise itself to other origins. nginx injects the bearer
+    token server-side, so a permissive Access-Control-Allow-Origin would let any
+    page on the network read the dashboard's data without holding the token.
+    """
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        resp = client.get("/api/summary", headers={"Origin": "https://evil.example"})
+        assert resp.status_code == 200, resp.text
+        assert "access-control-allow-origin" not in {k.lower() for k in resp.headers}, dict(resp.headers)
+
+        preflight = client.options(
+            "/api/sessions",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "DELETE",
+            },
+        )
+        assert preflight.status_code in (405, 404), preflight.status_code
+
+    print("OK (cors) - no Access-Control-Allow-Origin, preflight not honoured")
+
+
+def test_docs_endpoints_disabled() -> None:
+    """Schema endpoints are unauthenticated by default; they must not be served."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert client.get(path).status_code == 404, path
+    print("OK (docs) - /docs, /redoc and /openapi.json return 404")
+
+
+def test_refuses_to_start_without_a_token() -> None:
+    """An unset token must fail loudly rather than silently disabling auth."""
+    saved = os.environ.pop("INGEST_ALLOW_ANONYMOUS", None)
+    try:
+        importlib.reload(main_module)
+    except RuntimeError as exc:
+        assert "INGEST_AUTH_TOKEN" in str(exc), exc
+    else:
+        raise AssertionError("expected a RuntimeError with no token and no opt-in")
+    finally:
+        if saved is not None:
+            os.environ["INGEST_ALLOW_ANONYMOUS"] = saved
+        importlib.reload(main_module)
+
+    print("OK (startup guard) - refuses to start with no token and no explicit opt-in")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -292,6 +347,9 @@ def main() -> None:
     test_user_project_mapping()
     test_purge_empty_sessions()
     test_time_windows()
+    test_no_cors_headers()
+    test_docs_endpoints_disabled()
+    test_refuses_to_start_without_a_token()  # reloads main_module; keep last
 
 
 if __name__ == "__main__":

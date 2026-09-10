@@ -25,7 +25,7 @@ single-instance internal tool on a private network.
 - [ ] [1. Model price overrides and the budget cycle are dead code](#1-model-price-overrides-and-the-budget-cycle-are-dead-code) — *verified*
 - [x] [2. A failed API call renders no error at all](#2-a-failed-api-call-renders-no-error-at-all) — *fixed*
 - [x] [3. A failed project-tag save is swallowed silently](#3-a-failed-project-tag-save-is-swallowed-silently) — *fixed*
-- [ ] [4. CORS `*` plus the token-injecting proxy makes port 9595 an open API](#4-cors--plus-the-token-injecting-proxy-makes-port-9595-an-open-api) — *verified*
+- [x] [4. CORS `*` plus the token-injecting proxy makes port 9595 an open API](#4-cors--plus-the-token-injecting-proxy-makes-port-9595-an-open-api) — *fixed*
 - [ ] [5. Ingest blocks its own event loop](#5-ingest-blocks-its-own-event-loop) — *verified*
 - [ ] [6. Batches are not atomic, so failures permanently inflate totals](#6-batches-are-not-atomic-so-failures-permanently-inflate-totals) — *verified*
 - [ ] [7. Malformed OTLP payloads return 500 instead of 400](#7-malformed-otlp-payloads-return-500-instead-of-400) — *reported*
@@ -36,15 +36,15 @@ single-instance internal tool on a private network.
 **P2 — should fix**
 
 - [x] [10. `log.info` is never emitted](#10-loginfo-is-never-emitted) — *fixed*
-- [ ] [11. `ACTIVE_WINDOW_MINUTES` is not passed through Compose](#11-active_window_minutes-is-not-passed-through-compose) — *verified*
+- [x] [11. `ACTIVE_WINDOW_MINUTES` is not passed through Compose](#11-active_window_minutes-is-not-passed-through-compose) — *fixed*
 - [ ] [12. Three different "active session" windows](#12-three-different-active-session-windows) — *verified*
 - [ ] [13. Events with no `session.id` inflate the headline only](#13-events-with-no-sessionid-inflate-the-headline-only) — *verified*
 - [ ] [14. `computeHourlyRate` is a sawtooth, not a rate](#14-computehourlyrate-is-a-sawtooth-not-a-rate) — *reported*
 - [ ] [15. Polling destroys an in-progress inline edit](#15-polling-destroys-an-in-progress-inline-edit) — *reported*
 - [ ] [16. Chart rendering edge cases](#16-chart-rendering-edge-cases) — *reported*
 - [ ] [17. `/tablet` in light theme has invisible chart axes](#17-tablet-in-light-theme-has-invisible-chart-axes) — *reported*
-- [ ] [18. Empty `INGEST_AUTH_TOKEN` silently disables all authentication](#18-empty-ingest_auth_token-silently-disables-all-authentication) — *reported*
-- [ ] [19. `/docs`, `/redoc` and `/openapi.json` are unauthenticated](#19-docs-redoc-and-openapijson-are-unauthenticated) — *verified*
+- [x] [18. Empty `INGEST_AUTH_TOKEN` silently disables all authentication](#18-empty-ingest_auth_token-silently-disables-all-authentication) — *fixed*
+- [x] [19. `/docs`, `/redoc` and `/openapi.json` are unauthenticated](#19-docs-redoc-and-openapijson-are-unauthenticated) — *fixed*
 - [ ] [20. No body-size cap on `POST /v1/logs`, and no retention policy](#20-no-body-size-cap-on-post-v1logs-and-no-retention-policy) — *reported*
 - [ ] [21. Container and deployment hardening](#21-container-and-deployment-hardening) — *reported*
 - [ ] [22. Healthchecks pass in the situations that actually break the system](#22-healthchecks-pass-in-the-situations-that-actually-break-the-system) — *reported*
@@ -62,13 +62,13 @@ single-instance internal tool on a private network.
 
 **D. Documentation corrections**
 
-- [ ] [D1. `README.md` is out of date in four places](#d1-readmemd-is-out-of-date-in-four-places) — *verified*
-- [ ] [D2. `security.md` wrongly says `.claude/settings.json` is committed](#d2-securitymd-wrongly-says-claudesettingsjson-is-committed) — *verified*
-- [ ] [D3. A real internal IP is published in a committed file](#d3-a-real-internal-ip-is-published-in-a-committed-file) — *verified*
-- [ ] [D4. `api-reference.md` factual errors](#d4-api-referencemd-factual-errors) — *verified*
+- [x] [D1. `README.md` is out of date in four places](#d1-readmemd-is-out-of-date-in-four-places) — *fixed*
+- [x] [D2. `security.md` wrongly says `.claude/settings.json` is committed](#d2-securitymd-wrongly-says-claudesettingsjson-is-committed) — *fixed*
+- [x] [D3. A real internal IP is published in a committed file](#d3-a-real-internal-ip-is-published-in-a-committed-file) — *fixed*
+- [x] [D4. `api-reference.md` factual errors](#d4-api-referencemd-factual-errors) — *fixed*
 - [ ] [D5. Docs describe the dead features as working](#d5-docs-describe-the-dead-features-as-working) — *verified*
-- [ ] [D6. Diagnostics in the docs that do not work](#d6-diagnostics-in-the-docs-that-do-not-work) — *verified*
-- [ ] [D7. Smaller doc inaccuracies](#d7-smaller-doc-inaccuracies) — *verified*
+- [x] [D6. Diagnostics in the docs that do not work](#d6-diagnostics-in-the-docs-that-do-not-work) — *fixed*
+- [x] [D7. Smaller doc inaccuracies](#d7-smaller-doc-inaccuracies) — *fixed*
 - [ ] [D8. Client setup recommends the wrong default for dev containers](#d8-client-setup-recommends-the-wrong-default-for-dev-containers) — *verified*
 
 ---
@@ -139,7 +139,9 @@ the row in edit state). Copy that pattern.
 
 ### 4. CORS `*` plus the token-injecting proxy makes port 9595 an open API
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `CORSMiddleware` removed entirely — both consumers are same-origin through a proxy (nginx in production, Vite in development), so no CORS header is needed. A comment in `main.py` records why it is absent. Regression test `test_no_cors_headers` asserts no `Access-Control-Allow-Origin` is returned and that preflights are not honoured.
 
 `ingest/app/main.py:48` sets `allow_origins=["*"]`;
 `dashboard/nginx.conf.template:13` attaches `Authorization` server-side. So a
@@ -319,7 +321,9 @@ startup or a uvicorn `--log-config`.
 
 ### 11. `ACTIVE_WINDOW_MINUTES` is not passed through Compose
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Added to the ingest `environment:` block along with `INGEST_ALLOW_ANONYMOUS` and `LOG_LEVEL`, and documented in `.env.example`.
 
 `db.py:17` reads it, `docs/configuration.md` documents it, but
 `docker-compose.yml` never puts it in the ingest `environment:` block and
@@ -427,7 +431,9 @@ palette independent of the theme class, or add a toggle.
 
 ### 18. Empty `INGEST_AUTH_TOKEN` silently disables all authentication
 
-*Status: **reported**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Ingest now raises at import with an actionable message unless a token is set or `INGEST_ALLOW_ANONYMOUS=true` is given explicitly; anonymous mode logs a prominent warning on every startup. The comparison also moved to `hmac.compare_digest`. Handled in the app rather than in Compose so it protects non-Docker deployments too. Regression test `test_refuses_to_start_without_a_token`.
 
 `main.py:56` returns early when the token is empty, and
 `docker-compose.yml` uses `${INGEST_AUTH_TOKEN:-}`. A missing `.env` — which
@@ -442,7 +448,9 @@ here, but it is free to fix.
 
 ### 19. `/docs`, `/redoc` and `/openapi.json` are unauthenticated
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `docs_url`, `redoc_url` and `openapi_url` set to `None`. Regression test `test_docs_endpoints_disabled`; the protected-routes table in [Security](security.md) now lists them.
 
 All three return 200 without a token on port 9585. `docs/security.md` lists
 `/healthz` as the only open route. Impact is recon only and they are not proxied
@@ -608,7 +616,9 @@ in one pass.
 
 ### D1. `README.md` is out of date in four places
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Corrected in this pass.
 
 | Line | Claims | Actually |
 | --- | --- | --- |
@@ -619,7 +629,9 @@ in one pass.
 
 ### D2. `security.md` wrongly says `.claude/settings.json` is committed
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Corrected in this pass.
 
 It is not. `.gitignore:23` covers `.claude/`, `git ls-files` shows nothing
 tracked under it, and no token appears anywhere in history. The local file does
@@ -629,14 +641,18 @@ that never happened. Rewrite as a risk pattern, not an incident.
 
 ### D3. A real internal IP is published in a committed file
 
-*Status: **verified**.*
+*Status: **fixed**.*
 
-`docs/client-setup.md` uses `10.9.254.218:9585` as its example host. Low impact,
+**Fixed 2026-09-10.** Corrected in this pass.
+
+`docs/client-setup.md` used a real internal LAN IP as its example host. Low impact,
 but gratuitous. Replace with `10.0.0.5` or similar.
 
 ### D4. `api-reference.md` factual errors
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Corrected in this pass.
 
 - CORS methods listed as `GET, POST, PATCH`; the code allows
   `GET, PATCH, POST, PUT, DELETE`. The two omitted are exactly the ones the
@@ -659,7 +675,9 @@ decision — do not correct the docs to describe a feature you are about to wire
 
 ### D6. Diagnostics in the docs that do not work
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Corrected in this pass.
 
 - `troubleshooting.md` says `docker compose logs ingest | grep -i purge`. Purge
   successes are `log.info` and never emitted (item 10).
@@ -678,7 +696,9 @@ decision — do not correct the docs to describe a feature you are about to wire
 
 ### D7. Smaller doc inaccuracies
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** Corrected in this pass.
 
 - `development.md` claims TypeScript strict is on (item 29) and that tests must
   reload both `db` and `main` modules; they reload only `main`.

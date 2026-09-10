@@ -67,7 +67,7 @@ against a throwaway SQLite file.
 
 ### `dashboard/` — SolidJS SPA behind nginx
 
-A Vite-built SolidJS app served as static files by nginx. Three routes, wired in
+A Vite-built SolidJS app served as static files by nginx. Four routes, wired in
 [`src/index.tsx`](../dashboard/src/index.tsx):
 
 | Route | Component | Purpose |

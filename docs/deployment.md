@@ -168,8 +168,10 @@ INGEST_AUTH_TOKEN=... \
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Run it from the `ingest/` directory — `schema.sql` is resolved relative to the
-package.
+Run it from the `ingest/` directory so that `app.main:app` imports. (`schema.sql`
+itself is resolved from `__file__` and is cwd-independent.) Note the
+`pip install -r ingest/requirements.txt` above assumes the repository root, so
+the two commands are run from different directories.
 
 Keep it single-process. The backup scheduler runs in the app's event loop, so
 multiple workers would mean multiple schedulers racing on the same file.

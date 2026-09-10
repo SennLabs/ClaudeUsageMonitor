@@ -40,9 +40,11 @@ See [Getting started → Option B](getting-started.md#option-b--run-locally-no-d
 for the full sequence. In short:
 
 ```bash
+# terminal 1
 cd ingest && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/uvicorn app.main:app --port 8000 --reload
+INGEST_ALLOW_ANONYMOUS=1 .venv/bin/uvicorn app.main:app --port 8000 --reload
 
+# terminal 2
 cd dashboard && npm install && npm run dev
 ```
 
@@ -66,9 +68,11 @@ data, and that `hours=0` returns all time). Each test starts from a fresh
 database via `_reset_db`, and `make_payload` builds a one-record OTLP payload
 with a controllable age and token count.
 
-That module-reload dance is the thing to remember: `DB_PATH` and `AUTH_TOKEN`
-are read at import time, so a test that changes the environment must
-`importlib.reload` both modules afterwards.
+The thing to remember: `DB_PATH`, `AUTH_TOKEN` and `ALLOW_ANONYMOUS` are all
+read at **import time**. `DB_PATH` is therefore set before `app.db` is imported
+at the top of the file, and a test that changes `INGEST_AUTH_TOKEN` mid-run must
+`importlib.reload(main_module)` afterwards — as `test_auth_gating` and
+`test_refuses_to_start_without_a_token` both do.
 
 There are no frontend tests. `npm run build` runs `tsc -b` first, so a type
 error fails the build — treat that as the frontend's check.
@@ -195,7 +199,9 @@ dict in a REPL and inspect the `LogEvent` list without touching the database.
 
 Python: standard library plus FastAPI, type hints throughout, module-level
 constants read from the environment at import time. Frontend: TypeScript
-strict via `tsc -b`, no lint config in the repo — match what's around you.
+checked with `tsc -b`, though `strict` is **not** enabled — see
+[known issue 29](known-issues.md#29-typescript-strict-is-off). No lint config in
+the repo; match what's around you.
 
 Comments in this codebase explain *why*, not *what* (see the notes on WAL mode,
 attribute aliases, and the pre-paint theme script). Follow that.

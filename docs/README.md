@@ -22,7 +22,7 @@ These pages are the detail behind it.
 | [Configuration](configuration.md) | Every environment variable, port, and volume |
 | [API reference](api-reference.md) | All ingest and read endpoints, with request/response shapes |
 | [Data model](data-model.md) | SQLite schema, OTLP attribute mapping, aggregation queries |
-| [Dashboard guide](dashboard.md) | The three UI routes and what each control does |
+| [Dashboard guide](dashboard.md) | The four UI routes and what each control does |
 
 ## Operations
 

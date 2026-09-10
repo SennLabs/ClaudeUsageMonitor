@@ -15,7 +15,7 @@ Full documentation lives in [`docs/`](docs/README.md):
 | [Configuration](docs/configuration.md) | Every variable, port, and volume |
 | [API reference](docs/api-reference.md) | All endpoints and payload shapes |
 | [Data model](docs/data-model.md) | SQLite schema and OTLP attribute mapping |
-| [Dashboard guide](docs/dashboard.md) | The three views and their controls |
+| [Dashboard guide](docs/dashboard.md) | The four views and their controls |
 | [Deployment](docs/deployment.md) · [Backup](docs/backup-and-restore.md) · [Security](docs/security.md) · [Troubleshooting](docs/troubleshooting.md) | Running it |
 | [Development](docs/development.md) | Repo layout, tests, extending it |
 | [Known issues](docs/known-issues.md) · [Roadmap](docs/roadmap.md) | Outstanding defects and proposed work |
@@ -51,7 +51,7 @@ cd ingest
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt   # includes httpx, needed for test_ingest.py
 .venv/bin/python test_ingest.py                 # optional: run the smoke test
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 9585
+INGEST_ALLOW_ANONYMOUS=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 # dashboard (separate terminal)
 cd dashboard
@@ -69,7 +69,8 @@ docker compose up --build
 - Dashboard: `http://localhost:9595`
 - Ingest (for dev containers to report to): `http://<this-host>:9585`
 
-Usage data persists in the `usage-data` named volume across container recreation.
+Usage data persists in `./usage-data/usage.db` on the host — a bind mount, so it
+survives `docker compose down`, rebuilds and image upgrades.
 
 ## Configuring a dev container to report usage (the sending side)
 
@@ -110,7 +111,7 @@ Notes:
 
 - `INGEST_AUTH_TOKEN` (set via `.env`/`docker-compose.yml`) gates both
   `POST /v1/logs` and all `/api/*` reads. Leave it blank only on a trusted
-  private network — port 8000 has to be reachable from every reporting dev
+  private network — port 9585 has to be reachable from every reporting dev
   container, so it's the most exposed part of this stack.
 - The dashboard's nginx injects the token server-side when proxying `/api/*`
   to `ingest`; the token never ships in the browser bundle.

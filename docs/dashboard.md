@@ -1,6 +1,6 @@
 # Dashboard guide
 
-A SolidJS single-page app with three routes, served by nginx in production and
+A SolidJS single-page app with four routes, served by nginx in production and
 by Vite in development.
 
 | Route | Component | For |
@@ -81,12 +81,16 @@ last 60 minutes of points; for daily buckets it takes the newest bucket and
 divides by 24 — a rough figure by construction, since a daily bucket that is
 two hours old is still being filled.
 
-### Error toast
+### Error banner
 
-If any of the resource fetches fail, a red toast appears bottom-right: *"Couldn't
-reach the usage API — is the backend running?"* Most often that is a stopped
-ingest container or a token mismatch — see
+If any of the five resource fetches fail, a red banner appears bottom-right
+reading *"Couldn't reach the usage API"* followed by the actual error text.
+Most often that is a stopped ingest container or a token mismatch — see
 [Troubleshooting](troubleshooting.md).
+
+The last successfully fetched values stay on screen through a failed refetch
+rather than blanking, and an `ErrorBoundary` around each route catches anything
+unhandled instead of leaving a white page.
 
 ## `/tablet` — glanceable view
 
@@ -142,7 +146,9 @@ large `(untagged)` bucket.
 ## `/settings` — preferences and backups
 
 All preferences except the backup controls are stored in that browser's
-`localStorage` (key `claudeMonitorSettings`) and take effect on save.
+`localStorage` (key `claudeMonitorSettings`). They are read once when a view
+mounts, so a dashboard already open in another tab keeps the old values until it
+is reloaded.
 
 **Budget** — monthly budget amount and the day of month it resets (1–28; capped
 at 28 so every month has that day).
@@ -164,7 +170,7 @@ untouched. This affects display only; stored data is never rewritten.
 
 **Backup** — the one server-side section. It reads `/api/backup/status` and
 shows destination, method (`copy` or `rsync-ssh`), schedule, next run, last run,
-and last result. The **Back up now** button calls `POST /api/backup/trigger` and
+and last result. The **Run backup now** button calls `POST /api/backup/trigger` and
 reports success or the error string. With `BACKUP_DESTINATION` unset the section
 shows as disabled and the button returns a 400. See
 [Backup and restore](backup-and-restore.md).

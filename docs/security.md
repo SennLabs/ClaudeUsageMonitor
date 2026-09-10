@@ -18,7 +18,9 @@ open.
 | `POST /v1/logs` | Yes |
 | `GET /api/*` (all reads) | Yes |
 | `PATCH /api/sessions/{id}` | Yes |
+| `PUT`/`DELETE /api/user-projects/{user_id}` | Yes |
 | `POST /api/backup/trigger` | Yes |
+| `GET /docs`, `/redoc`, `/openapi.json` | Disabled — return 404 |
 | `GET /healthz` | **No** — intentionally, for health probes |
 
 Enforcement is one dependency in [`main.py`](../ingest/app/main.py):
@@ -33,13 +35,11 @@ def require_auth(request: Request) -> None:
 
 Two properties follow directly from those four lines:
 
-- **An empty token disables authentication silently.** There is no warning at
-  startup. A typo'd variable name or a missing `.env` produces a fully open
-  service that looks perfectly healthy.
-- **The comparison is not constant-time.** A plain `!=` on strings is
-  theoretically timing-attackable. Over a network, against a high-entropy random
-  token, this is not a practical concern — but if you are hardening, use
-  `hmac.compare_digest`.
+- **An empty token no longer passes silently** (fixed 2026-09-10). The service
+  refuses to start unless `INGEST_ALLOW_ANONYMOUS=true` is set as well, and logs
+  a prominent warning at startup when running in that mode.
+- **The comparison is constant-time**, via `hmac.compare_digest`. This was never
+  a practical risk at this token entropy over a LAN, but it costs nothing.
 
 ## Known limits — read these before exposing anything
 
@@ -58,9 +58,11 @@ front if that is not acceptable.
 every reporting dev container, which makes it the most widely-reachable part of
 the stack. It should be reachable *only* from those networks.
 
-**`allow_origins=["*"]`.** With a token set this is fine — a browser on a
-malicious page has no way to obtain the header. With the token unset, any web
-page a user on your network visits can read the API and post fabricated events.
+**CORS has been removed** (2026-09-10). It previously ran `allow_origins=["*"]`,
+which was not fine: nginx injects the bearer token server-side, so a page on any
+origin could call the dashboard's `/api/*` without holding the token, and the
+wildcard let the script read the response. Both consumers are same-origin
+through a proxy, so no CORS header is needed at all.
 
 **No TLS.** Both services speak plain HTTP. On the wire, the bearer token is
 visible to anyone who can observe the traffic. Fine on a trusted LAN, not fine
@@ -93,10 +95,13 @@ side — it is checked in and carries the token in
 `OTEL_EXPORTER_OTLP_HEADERS`. Prefer `~/.claude/settings.json` (user-level) or
 `.claude/settings.local.json` (gitignored) for anything with a credential.
 
-> This repository's own `.claude/settings.json` is committed and contains a
-> live-looking endpoint and token. Treat it as an illustration of the
-> configuration shape, not a file to copy — and if that token is real, rotate
-> it.
+> This repository's `.claude/settings.json` is **not** committed — `.gitignore`
+> covers `.claude/`, and no token appears anywhere in history. It does exist
+> locally with a real endpoint and token in it, which is worth knowing: the file
+> is plaintext on disk and reaches anything that ingests the working tree (a
+> workspace backup, a screenshare, a support bundle). Keep client credentials in
+> `~/.claude/settings.json` or `.claude/settings.local.json`, and rotate a token
+> you have shared.
 
 **Rotating:**
 
@@ -120,9 +125,9 @@ Beyond that:
 - [ ] Firewall 9595 to your office/VPN range
 - [ ] Terminate TLS in front of both if traffic leaves a trusted LAN
 - [ ] Put SSO or basic auth in front of the dashboard if read access needs control
-- [ ] Tighten CORS to your dashboard's real origin if you don't need the Vite dev server
-- [ ] Use `hmac.compare_digest` for the token comparison
-- [ ] Log a loud warning at startup when no token is configured
+- [x] ~~Tighten CORS~~ — removed entirely, 2026-09-10
+- [x] ~~Use `hmac.compare_digest`~~ — done, 2026-09-10
+- [x] ~~Warn at startup when no token is configured~~ — now refuses to start, 2026-09-10
 - [ ] Use a dedicated, restricted SSH key for backups — not your personal one
 - [ ] Verify backup destination permissions: snapshots are full copies of the data
 

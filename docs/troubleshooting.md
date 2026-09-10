@@ -92,6 +92,25 @@ plus up to `refreshIntervalMs` (5s) for the dashboard to poll.
 
 ---
 
+## Ingest won't start: "INGEST_AUTH_TOKEN is not set"
+
+Working as intended. An empty token used to bring the service up completely
+open while reporting healthy, so it now refuses to start instead. Either set a
+real token in `.env`:
+
+```bash
+python3 -c "import secrets; print(secrets.token_hex(20))"
+```
+
+or, if you genuinely want an unauthenticated service on a trusted network, set
+`INGEST_ALLOW_ANONYMOUS=true` alongside it. That mode logs a warning on every
+startup.
+
+Local development wants the second option — nothing injects the bearer header
+in dev, so a configured token just produces 401s.
+
+---
+
 ## `401 Unauthorized`
 
 The configured `INGEST_AUTH_TOKEN` and the token in the request don't match.
@@ -207,6 +226,9 @@ To confirm what the sweep is doing:
 ```bash
 docker compose logs ingest | grep -i purge
 ```
+
+(That works as of 2026-09-10 — `log.info` was previously swallowed entirely.
+Raise `LOG_LEVEL=DEBUG` for more.)
 
 To turn the behaviour off, comment out the `_purge_loop` task in the lifespan in
 [`main.py`](../ingest/app/main.py). To give sessions longer before they qualify,

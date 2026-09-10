@@ -53,7 +53,7 @@ which is often not `localhost`:
 | Situation | Use |
 | --- | --- |
 | Claude Code and ingest on the same machine, no container | `http://localhost:9585` |
-| Dev container on the same Docker host as ingest | The host's LAN IP, e.g. `http://10.9.254.218:9585`, or `http://host.docker.internal:9585` |
+| Dev container on the same Docker host as ingest | The host's LAN IP, e.g. `http://10.0.0.5:9585`, or `http://host.docker.internal:9585` |
 | Dev container elsewhere on the network | The ingest host's LAN IP or internal DNS name |
 | Both in the same compose project | `http://ingest:8000` (service name, internal port) |
 

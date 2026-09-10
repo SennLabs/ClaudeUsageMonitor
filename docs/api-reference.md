@@ -7,23 +7,38 @@ network). All routes are defined in [`ingest/app/main.py`](../ingest/app/main.py
 
 Every route except `GET /healthz` is wrapped in the `require_auth` dependency:
 
-- If `INGEST_AUTH_TOKEN` is **unset or empty**, all requests are allowed.
+- If `INGEST_AUTH_TOKEN` is **unset or empty**, the service refuses to start
+  unless `INGEST_ALLOW_ANONYMOUS=true` is also set — in which case all requests
+  are allowed and a warning is logged at startup.
 - If it is set, the request must carry `Authorization: Bearer <token>` exactly.
   Anything else returns `401 {"detail": "Unauthorized"}`.
 
 There is no per-client token, no scopes, and no rotation mechanism — one shared
 secret. See [Security](security.md).
 
+FastAPI's interactive docs (`/docs`, `/redoc`, `/openapi.json`) are disabled —
+they are unauthenticated by default and this port is the most widely reachable
+part of the stack.
+
+The `curl` examples throughout these docs assume `$INGEST_AUTH_TOKEN` is set in
+your shell. `.env` is read by Compose, not sourced by it, so load it first:
+
 ```bash
+set -a; . ./.env; set +a
 curl -H "Authorization: Bearer $INGEST_AUTH_TOKEN" http://localhost:9585/api/summary
 ```
 
 ## CORS
 
-`allow_origins=["*"]`, methods `GET`, `POST`, `PATCH`. Deliberate — the Vite dev
-server and any static host are separate origins. Combined with a token this is
-fine; without one, any web page a user visits can read the API if it can route
-to the host.
+**There is none, deliberately.** Both consumers are same-origin: nginx proxies
+`/api/*` to this service in production, and the Vite dev server proxies `/api`
+to it in development. No browser talks to this port cross-origin, so no
+`Access-Control-Allow-Origin` header is sent and preflights are not honoured.
+
+Do not add a CORS middleware back without reading the comment in
+[`main.py`](../ingest/app/main.py). It previously ran `allow_origins=["*"]`,
+which combined badly with nginx injecting the bearer token server-side — see
+[Security](security.md).
 
 ---
 
@@ -70,8 +85,10 @@ Notes:
   `sessions` upsert is skipped.
 - Records with a missing or zero `timeUnixNano` are timestamped with the
   server's current UTC time.
-- Batches are processed record by record with no transaction spanning the
-  batch. A malformed record raises and aborts the rest of that request.
+- The whole body is parsed before any insert, so a record that fails to *parse*
+  discards the entire batch. Records are then written one transaction each, so a
+  failure partway through leaves earlier ones committed — see
+  [known issue 6](known-issues.md#6-batches-are-not-atomic-so-failures-permanently-inflate-totals).
 - There is no de-duplication. If a client retries a batch, its events are
   counted twice.
 
@@ -109,8 +126,7 @@ All-time totals plus a live active count.
 - `total_sessions` counts distinct session ids **that have events**, so it can
   be lower than the row count of the `sessions` table.
 - `active_sessions` counts sessions whose `last_seen_at` is within the last
-  15 minutes. That window is a server-side constant, not configurable by
-  environment variable.
+  `ACTIVE_WINDOW_MINUTES` (default 15) — see [Configuration](configuration.md).
 
 ---
 

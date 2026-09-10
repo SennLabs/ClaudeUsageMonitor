@@ -68,13 +68,17 @@ Two terminals.
 cd ingest
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt   # dev adds httpx, needed by the smoke test
-.venv/bin/python test_ingest.py                 # optional but fast; should print PASS lines
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+.venv/bin/python test_ingest.py                 # optional but fast; prints an OK line per test
+INGEST_ALLOW_ANONYMOUS=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Port 8000 matters: the Vite dev server proxies `/api` to `http://127.0.0.1:8000`
 (see [`dashboard/vite.config.ts`](../dashboard/vite.config.ts)). If you run
 uvicorn on a different port, change the proxy target to match.
+
+`INGEST_ALLOW_ANONYMOUS=1` is required: ingest refuses to start with no token
+rather than coming up silently open. Local development wants no token, because
+nothing injects the header in dev — see below.
 
 Without `DB_PATH` set, the database is created at `ingest/usage.db`. Override it
 if you want it elsewhere:

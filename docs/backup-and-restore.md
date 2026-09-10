@@ -126,7 +126,8 @@ pushes the following one out rather than overlapping.
 
 ## Manual backup
 
-From the dashboard: `/settings` → Backup → **Back up now**.
+From the dashboard: `/settings` → Backup → **Run backup now**. The button is
+only rendered when a destination is configured.
 
 From the CLI:
 

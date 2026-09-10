@@ -1,10 +1,10 @@
 import asyncio
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -24,7 +24,24 @@ logging.getLogger("app").setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 log = logging.getLogger(__name__)
 
-AUTH_TOKEN = os.environ.get("INGEST_AUTH_TOKEN")
+AUTH_TOKEN = os.environ.get("INGEST_AUTH_TOKEN", "").strip()
+
+# Running without a token leaves every route, including POST /v1/logs, open to
+# anything that can reach the port. That is a legitimate choice on a trusted
+# network, but it must be a choice — an unset variable (a missing .env, a typo
+# in the name) used to produce a wide-open service that looked perfectly
+# healthy, with no signal anywhere.
+ALLOW_ANONYMOUS = os.environ.get("INGEST_ALLOW_ANONYMOUS", "").strip().lower() in {
+    "1", "true", "yes",
+}
+
+if not AUTH_TOKEN and not ALLOW_ANONYMOUS:
+    raise RuntimeError(
+        "INGEST_AUTH_TOKEN is not set. Set it to a random secret (for example "
+        "`python3 -c \"import secrets; print(secrets.token_hex(20))\"`), or set "
+        "INGEST_ALLOW_ANONYMOUS=true to deliberately run with authentication "
+        "disabled on a trusted network."
+    )
 
 # How often to sweep out sessions that went inactive without logging any usage.
 PURGE_INTERVAL_SECONDS = 60
@@ -43,6 +60,12 @@ async def _purge_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not AUTH_TOKEN:
+        log.warning(
+            "AUTHENTICATION DISABLED — INGEST_ALLOW_ANONYMOUS is set and no token "
+            "is configured. Every route, including POST /v1/logs, is open to "
+            "anything that can reach this port."
+        )
     db.init_db()
     tasks = [asyncio.create_task(_purge_loop())]
     if backup.ENABLED:
@@ -52,22 +75,35 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
-app = FastAPI(title="Claude Usage Monitor - Ingest", lifespan=lifespan)
-
-# Dashboard is a separate origin (Vite dev server / static host) hitting the
-# /api/* routes — this is an internal tool, so allow any origin.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "PATCH", "POST", "PUT", "DELETE"],
-    allow_headers=["*"],
+app = FastAPI(
+    title="Claude Usage Monitor - Ingest",
+    lifespan=lifespan,
+    # The interactive docs are unauthenticated by default and this port has to
+    # be reachable from every reporting dev container. Nothing needs them in
+    # production; re-enable locally if you want to browse the schema.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
+
+# No CORS middleware, deliberately — do not add one back without reading this.
+#
+# Both consumers are same-origin: nginx proxies /api/* to this service in
+# production, and the Vite dev server proxies /api to it in development. A
+# browser never talks to this port cross-origin.
+#
+# It previously ran allow_origins=["*"], which combined badly with nginx
+# injecting the bearer token server-side: any page in any browser on the
+# network could call the dashboard's /api/* and read the response, because the
+# credential came from nginx rather than the caller, and the wildcard let the
+# script read the body.
 
 
 def require_auth(request: Request) -> None:
     if not AUTH_TOKEN:
-        return
-    if request.headers.get("authorization") != f"Bearer {AUTH_TOKEN}":
+        return  # anonymous mode, explicitly opted into at startup
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied, f"Bearer {AUTH_TOKEN}"):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 

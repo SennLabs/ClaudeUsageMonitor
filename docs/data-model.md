@@ -229,10 +229,13 @@ sqlite3 ./usage-data/usage.db "SELECT COUNT(*) FROM usage_events;"
 Useful one-liners:
 
 ```sql
--- Spend per day, last 30 days
+-- Spend per day, last 30 days.
+-- Note the bound format: timestamps are TEXT and compare lexicographically, so
+-- comparing against datetime('now', ...) — which uses a space separator — would
+-- wrongly include the whole boundary day. See "Timestamps" above.
 SELECT date(occurred_at) AS day, ROUND(SUM(cost_usd), 2) AS usd
 FROM usage_events
-WHERE occurred_at >= datetime('now', '-30 days')
+WHERE occurred_at >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-30 days')
 GROUP BY day ORDER BY day;
 
 -- Which attributes are arriving that we don't have columns for
@@ -259,7 +262,8 @@ tens of thousands of rows a week — small, but `raw_attributes` is the bulk of
 each row's size. Nothing prunes automatically. If the file gets unwieldy:
 
 ```sql
-DELETE FROM usage_events WHERE occurred_at < datetime('now', '-180 days');
+DELETE FROM usage_events
+ WHERE occurred_at < strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-180 days');
 VACUUM;
 ```
 

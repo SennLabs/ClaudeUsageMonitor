@@ -5,6 +5,13 @@ services:
       - "9585:8000"
     environment:
       - INGEST_AUTH_TOKEN=${INGEST_AUTH_TOKEN:-}
+      # Ingest refuses to start with no token unless this is explicitly set,
+      # so a missing .env fails loudly instead of coming up wide open.
+      - INGEST_ALLOW_ANONYMOUS=${INGEST_ALLOW_ANONYMOUS:-}
+      # Minutes a session may go quiet before it stops counting as active.
+      # Also the grace period before an unused session is purged.
+      - ACTIVE_WINDOW_MINUTES=${ACTIVE_WINDOW_MINUTES:-15}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # ── Backup (all optional) ──────────────────────────────────────────
       # Local/mounted path:   BACKUP_DESTINATION=/backups
       # rsync over SSH:       BACKUP_DESTINATION=user@nas:/volume1/claude-backups/
