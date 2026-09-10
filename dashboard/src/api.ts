@@ -50,6 +50,66 @@ export interface ToolStat {
   max_ms: number | null
 }
 
+export interface CacheRow {
+  name?: string
+  uncached_input_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  cost_usd: number
+  hit_ratio: number | null
+}
+
+export interface CacheEfficiency {
+  overall: CacheRow
+  by_project: CacheRow[]
+}
+
+export interface PromptRow {
+  prompt_id: string
+  project_name: string
+  session_id: string | null
+  requests: number
+  cost_usd: number
+  total_tokens: number
+  duration_ms: number
+  started_at: string
+  models: string | null
+}
+
+export interface Audit {
+  permission_changes: {
+    occurred_at: string
+    session_id: string | null
+    from_mode: string | null
+    to_mode: string | null
+    trigger: string | null
+  }[]
+  bypass_count: number
+  auth_failures: {
+    occurred_at: string
+    session_id: string | null
+    action: string | null
+    success: string | null
+    error_category: string | null
+  }[]
+  mcp_connections: {
+    server: string
+    status: string | null
+    transport: string | null
+    n: number
+    last_at: string
+  }[]
+}
+
+export const fetchCacheEfficiency = (hours = 24) =>
+  getJSON<CacheEfficiency>(`/cache-efficiency?hours=${hours}`)
+export const fetchPrompts = (hours = 24) => getJSON<PromptRow[]>(`/prompts?hours=${hours}`)
+export const fetchAudit = (hours = 168) => getJSON<Audit>(`/audit?hours=${hours}`)
+
+/** Not fetched — handed to the browser as a download. */
+export const exportCsvUrl = (since?: string) =>
+  `${BASE}/export.csv${since ? `?since=${encodeURIComponent(since)}` : ''}`
+
 export interface FleetRow {
   app_version: string
   terminal_type: string

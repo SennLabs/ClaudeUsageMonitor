@@ -5,12 +5,15 @@ Run with: python3 test_ingest.py
 """
 
 import atexit
+import csv
 import importlib
+import io
 import os
 import shutil
 import sqlite3
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -798,6 +801,88 @@ def test_healthz_checks_the_database() -> None:
     print("OK (healthz) - reports 503 when the database is unreachable")
 
 
+
+def test_cache_efficiency_and_prompts() -> None:
+    """Cache hit ratio and per-prompt cost, from data already being stored."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload(
+            "ce-1", project="pacs", input_tokens=1000, cost_usd=1.0, extra_attrs=[
+                {"key": "cache_read_tokens", "value": {"intValue": "3000"}},
+                {"key": "cache_creation_tokens", "value": {"intValue": "500"}},
+                {"key": "prompt.id", "value": {"stringValue": "p-1"}}]))
+        client.post("/v1/logs", json=make_payload(
+            "ce-1", project="pacs", input_tokens=1000, cost_usd=2.0, extra_attrs=[
+                {"key": "prompt.id", "value": {"stringValue": "p-1"}}]))
+
+        cache = client.get("/api/cache-efficiency?hours=0").json()
+        # 3000 served from cache out of 5000 input tokens overall
+        assert cache["overall"]["cache_read_tokens"] == 3000, cache
+        assert cache["overall"]["hit_ratio"] == 0.6, cache
+        assert cache["by_project"][0]["name"] == "pacs", cache
+
+        prompts = client.get("/api/prompts?hours=0").json()
+        assert len(prompts) == 1, prompts
+        assert prompts[0]["prompt_id"] == "p-1", prompts
+        assert prompts[0]["requests"] == 2 and prompts[0]["cost_usd"] == 3.0, prompts
+
+    print("OK (cache/prompts) - hit ratio computed, cost grouped by prompt")
+
+
+def test_audit_view() -> None:
+    """Permission-mode, auth and MCP events surface for the first time."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload(
+            "a-1", event_name="claude_code.permission_mode_changed", cost_usd=None,
+            extra_attrs=[{"key": "from_mode", "value": {"stringValue": "default"}},
+                         {"key": "to_mode", "value": {"stringValue": "bypassPermissions"}},
+                         {"key": "trigger", "value": {"stringValue": "shift_tab"}}]))
+        client.post("/v1/logs", json=make_payload(
+            "a-1", event_name="claude_code.auth", cost_usd=None,
+            extra_attrs=[{"key": "action", "value": {"stringValue": "login"}},
+                         {"key": "success", "value": {"stringValue": "false"}},
+                         {"key": "error_category", "value": {"stringValue": "network"}}]))
+        client.post("/v1/logs", json=make_payload(
+            "a-1", event_name="claude_code.mcp_server_connection", cost_usd=None,
+            extra_attrs=[{"key": "status", "value": {"stringValue": "failed"}},
+                         {"key": "transport_type", "value": {"stringValue": "stdio"}},
+                         {"key": "mcp_server.name", "value": {"stringValue": "custom"}}]))
+
+        audit = client.get("/api/audit?hours=0").json()
+        assert audit["bypass_count"] == 1, audit
+        assert audit["permission_changes"][0]["to_mode"] == "bypassPermissions", audit
+        assert audit["auth_failures"][0]["error_category"] == "network", audit
+        assert audit["mcp_connections"][0]["status"] == "failed", audit
+
+    print("OK (audit) - bypassPermissions, auth failures and MCP failures reported")
+
+
+def test_csv_export() -> None:
+    """Export is the answer to 'justify this spend'."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("x-1", project="pacs", cost_usd=1.5))
+        client.post("/v1/logs", json=make_payload("x-2", age_seconds=40 * 86400, cost_usd=9.0))
+
+        resp = client.get("/api/export.csv")
+        assert resp.status_code == 200, resp.text
+        assert "text/csv" in resp.headers["content-type"], resp.headers
+        assert "attachment" in resp.headers["content-disposition"], resp.headers
+
+        rows = list(csv.DictReader(io.StringIO(resp.text)))
+        assert len(rows) == 2, rows
+        assert rows[0]["session_id"] == "x-2", rows  # ordered by time
+        assert rows[1]["project_name"] == "pacs", rows
+
+        # Bounded export
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        recent = list(csv.DictReader(io.StringIO(client.get(f"/api/export.csv?since={cutoff}").text)))
+        assert len(recent) == 1 and recent[0]["session_id"] == "x-1", recent
+
+    print("OK (export) - CSV streamed with headers, ordered, and bounded by since")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -817,6 +902,9 @@ def main() -> None:
     test_promoted_attributes_are_queryable()
     test_errors_and_tools_views()
     test_unattributed_events_are_reported()
+    test_cache_efficiency_and_prompts()
+    test_audit_view()
+    test_csv_export()
     test_retention_and_maintenance()
     test_sessions_pagination()
     test_healthz_checks_the_database()

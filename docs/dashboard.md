@@ -134,7 +134,13 @@ became columns. Same time-window control as the main chart.
 | **Cost by agent** | Per-agent spend |
 | **Cost by skill and MCP server** | Per-skill and per-MCP-server spend |
 | **Tool performance** | Calls, failures and duration per tool |
+| **Cache efficiency** | Hit ratio overall and per project — cached input is billed far below uncached, so this is the panel that suggests an action |
+| **Most expensive prompts** | What a single user question cost, grouped by `prompt.id` |
+| **Audit** | Permission-mode changes (with a banner for `bypassPermissions`), failed logins, MCP connectivity |
 | **Fleet** | Which Claude Code versions and terminals are reporting, and when each was last seen |
+
+There is also an **Export CSV** button in the header, which downloads every
+event joined to its project — the answer to being asked to justify the spend.
 
 `(none)` in a row means the attribute was absent on those events. Some values
 are redacted by Claude Code itself unless the client sets

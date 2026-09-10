@@ -999,6 +999,169 @@ def fetch_tool_stats(hours: int | None = 24) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def fetch_cache_efficiency(hours: int | None = 24) -> dict:
+    """
+    Cache hit ratio, overall and per project.
+
+    Of the levers available to a Claude Code user, this is one of the few that
+    actually moves the bill: a cached input token is billed at a fraction of an
+    uncached one. The numbers were being collected from the start and shown
+    almost nowhere.
+    """
+    where, params = _window_clause(hours)
+    clause = where.format(col="e.occurred_at")
+    joiner = "AND" if clause else "WHERE"
+    cols = """
+        COALESCE(SUM(e.input_tokens), 0)           AS uncached_input_tokens,
+        COALESCE(SUM(e.cache_read_tokens), 0)      AS cache_read_tokens,
+        COALESCE(SUM(e.cache_creation_tokens), 0)  AS cache_creation_tokens,
+        COALESCE(SUM(e.cost_usd), 0)               AS cost_usd
+    """
+
+    def ratio(row: dict) -> dict:
+        served = row["cache_read_tokens"]
+        total = served + row["uncached_input_tokens"]
+        return {**row, "hit_ratio": round(served / total, 4) if total else None}
+
+    with _connect() as conn:
+        overall = ratio(dict(conn.execute(
+            f"SELECT {cols} FROM usage_events e {clause} {joiner} e.event_name = "
+            "'claude_code.api_request'", params).fetchone()))
+        by_project = [
+            ratio(dict(r))
+            for r in conn.execute(
+                f"""
+                SELECT COALESCE(s.project_name, '(untagged)') AS name, {cols}
+                  FROM usage_events e
+                  LEFT JOIN sessions s ON s.session_id = e.session_id
+                  {clause}
+                  {joiner} e.event_name = 'claude_code.api_request'
+                 GROUP BY name
+                 ORDER BY cost_usd DESC
+                 LIMIT 20
+                """,
+                params,
+            ).fetchall()
+        ]
+    return {"overall": overall, "by_project": by_project}
+
+
+def fetch_prompts(hours: int | None = 24, limit: int = 25) -> list[dict]:
+    """Cost per user prompt. Every event of one prompt shares a prompt.id."""
+    where, params = _window_clause(hours)
+    clause = where.format(col="e.occurred_at")
+    joiner = "AND" if clause else "WHERE"
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                e.prompt_id,
+                COALESCE(s.project_name, '(untagged)')     AS project_name,
+                e.session_id,
+                COUNT(*)                                   AS requests,
+                COALESCE(SUM(e.cost_usd), 0)               AS cost_usd,
+                COALESCE(SUM(COALESCE(e.input_tokens,0)
+                           + COALESCE(e.output_tokens,0)), 0) AS total_tokens,
+                COALESCE(SUM(e.duration_ms), 0)            AS duration_ms,
+                MIN(e.occurred_at)                         AS started_at,
+                GROUP_CONCAT(DISTINCT e.model)             AS models
+              FROM usage_events e
+              LEFT JOIN sessions s ON s.session_id = e.session_id
+              {clause}
+              {joiner} e.prompt_id IS NOT NULL
+             GROUP BY e.prompt_id
+             ORDER BY cost_usd DESC
+             LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def fetch_audit(hours: int | None = 24) -> dict:
+    """
+    Events that have nothing to do with cost but everything to do with running
+    a fleet: permission-mode changes, logins, and MCP server connectivity.
+    """
+    where, params = _window_clause(hours)
+    clause = where.format(col="occurred_at")
+    joiner = "AND" if clause else "WHERE"
+
+    def rows(sql: str) -> list[dict]:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    with _connect() as conn:
+        permission_changes = rows(f"""
+            SELECT occurred_at, session_id,
+                   json_extract(raw_attributes, '$.from_mode') AS from_mode,
+                   json_extract(raw_attributes, '$.to_mode')   AS to_mode,
+                   json_extract(raw_attributes, '$.trigger')   AS trigger
+              FROM usage_events {clause}
+              {joiner} event_name = 'claude_code.permission_mode_changed'
+             ORDER BY occurred_at DESC LIMIT 50
+        """)
+        auth_failures = rows(f"""
+            SELECT occurred_at, session_id,
+                   json_extract(raw_attributes, '$.action')         AS action,
+                   json_extract(raw_attributes, '$.success')        AS success,
+                   json_extract(raw_attributes, '$.error_category') AS error_category
+              FROM usage_events {clause}
+              {joiner} event_name = 'claude_code.auth'
+               AND COALESCE(json_extract(raw_attributes, '$.success'), 'true') = 'false'
+             ORDER BY occurred_at DESC LIMIT 50
+        """)
+        mcp = rows(f"""
+            SELECT COALESCE(mcp_server_name, json_extract(raw_attributes, '$.server_name'),
+                            '(unnamed)')                              AS server,
+                   json_extract(raw_attributes, '$.status')           AS status,
+                   json_extract(raw_attributes, '$.transport_type')   AS transport,
+                   COUNT(*)                                           AS n,
+                   MAX(occurred_at)                                   AS last_at
+              FROM usage_events {clause}
+              {joiner} event_name = 'claude_code.mcp_server_connection'
+             GROUP BY server, status, transport
+             ORDER BY n DESC LIMIT 30
+        """)
+
+    # bypassPermissions is the one worth an alert rather than a row in a table.
+    bypasses = [c for c in permission_changes if c["to_mode"] == "bypassPermissions"]
+    return {
+        "permission_changes": permission_changes,
+        "bypass_count": len(bypasses),
+        "auth_failures": auth_failures,
+        "mcp_connections": mcp,
+    }
+
+
+def iter_export_rows(since: str | None = None, until: str | None = None):
+    """Stream events for CSV export, joined to their session's project."""
+    conditions, params = [], []
+    if since:
+        conditions.append("e.occurred_at >= ?"); params.append(since)
+    if until:
+        conditions.append("e.occurred_at < ?"); params.append(until)
+    clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    with _connect() as conn:
+        cursor = conn.execute(
+            f"""
+            SELECT e.occurred_at, e.event_name, e.session_id,
+                   s.user_id, COALESCE(s.project_name, '') AS project_name,
+                   e.model, e.query_source, e.effort, e.speed,
+                   e.input_tokens, e.output_tokens, e.cache_read_tokens,
+                   e.cache_creation_tokens, e.cost_usd, e.duration_ms
+              FROM usage_events e
+              LEFT JOIN sessions s ON s.session_id = e.session_id
+              {clause}
+             ORDER BY e.occurred_at
+            """,
+            params,
+        )
+        # Yielded inside the connection's scope so the cursor stays valid.
+        for row in cursor:
+            yield dict(row)
+
+
 def fetch_fleet() -> list[dict]:
     """Which Claude Code versions and terminals are reporting."""
     with _connect() as conn:

@@ -1,12 +1,14 @@
 import asyncio
+import csv
 import hmac
+import io
 import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import backup, db
@@ -308,6 +310,54 @@ async def get_errors(hours: int = 24):
 @app.get("/api/tools", dependencies=[Depends(require_auth)])
 async def get_tools(hours: int = 24):
     return db.fetch_tool_stats(hours=_window(hours))
+
+
+@app.get("/api/cache-efficiency", dependencies=[Depends(require_auth)])
+async def get_cache_efficiency(hours: int = 24):
+    return db.fetch_cache_efficiency(hours=_window(hours))
+
+
+@app.get("/api/prompts", dependencies=[Depends(require_auth)])
+async def get_prompts(hours: int = 24, limit: int = 25):
+    return db.fetch_prompts(hours=_window(hours), limit=max(1, min(limit, 200)))
+
+
+@app.get("/api/audit", dependencies=[Depends(require_auth)])
+async def get_audit(hours: int = 168):
+    return db.fetch_audit(hours=_window(hours))
+
+
+@app.get("/api/export.csv", dependencies=[Depends(require_auth)])
+async def export_csv(since: str | None = None, until: str | None = None):
+    """
+    Every event in the range as CSV, streamed.
+
+    Bounds are ISO 8601 and compared as text against the stored timestamps —
+    a bare date like 2026-09-01 works because the format sorts lexicographically.
+    """
+    columns = [
+        "occurred_at", "event_name", "session_id", "user_id", "project_name",
+        "model", "query_source", "effort", "speed",
+        "input_tokens", "output_tokens", "cache_read_tokens",
+        "cache_creation_tokens", "cost_usd", "duration_ms",
+    ]
+
+    def rows():
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        yield buffer.getvalue()
+        for row in db.iter_export_rows(since=since, until=until):
+            buffer.seek(0); buffer.truncate(0)
+            writer.writerow(row)
+            yield buffer.getvalue()
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return StreamingResponse(
+        rows(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="claude-usage-{stamp}.csv"'},
+    )
 
 
 @app.get("/api/maintenance", dependencies=[Depends(require_auth)])

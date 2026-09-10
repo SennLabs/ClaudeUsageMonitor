@@ -454,6 +454,79 @@ than only logged.
 
 Counters are cumulative for this process and reset on restart.
 
+### `GET /api/cache-efficiency`
+
+Cache hit ratio, overall and per project. Cached input is billed at a fraction
+of uncached, so this is one of the few numbers here that points at an action.
+
+```json
+{
+  "overall": {"uncached_input_tokens": 2000, "cache_read_tokens": 8000,
+              "cache_creation_tokens": 0, "cost_usd": 0.5, "hit_ratio": 0.8},
+  "by_project": [{"name": "pacs", "hit_ratio": 0.8, "...": "..."}]
+}
+```
+
+`hit_ratio` is `cache_read / (cache_read + uncached_input)`, or `null` when
+there was no input at all in the window.
+
+### `GET /api/prompts`
+
+Cost per user prompt — every event of one prompt shares a `prompt.id`.
+
+| Query param | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `hours` | int | `24` | `0` = all time |
+| `limit` | int | `25` | Clamped to 1–200 |
+
+```json
+[{"prompt_id": "p-9", "project_name": "pacs", "session_id": "s1",
+  "requests": 4, "cost_usd": 0.51, "total_tokens": 41022,
+  "duration_ms": 9100, "started_at": "...", "models": "claude-opus-5"}]
+```
+
+Ordered by cost. Events without a `prompt.id` are excluded rather than lumped
+together.
+
+### `GET /api/audit`
+
+Events with nothing to do with cost. Defaults to a 7-day window.
+
+```json
+{
+  "permission_changes": [{"occurred_at": "...", "session_id": "s1",
+                          "from_mode": "default", "to_mode": "bypassPermissions",
+                          "trigger": "shift_tab"}],
+  "bypass_count": 1,
+  "auth_failures": [{"action": "login", "error_category": "network", "...": "..."}],
+  "mcp_connections": [{"server": "custom", "status": "failed",
+                       "transport": "stdio", "n": 3, "last_at": "..."}]
+}
+```
+
+`bypass_count` counts transitions into `bypassPermissions`, which the dashboard
+raises as a banner. For a fleet monitored centrally that is arguably worth more
+than another cost chart.
+
+### `GET /api/export.csv`
+
+Every event in the range as streamed CSV, joined to its session's project.
+
+| Query param | Type | Notes |
+| --- | --- | --- |
+| `since` | ISO 8601 | Inclusive lower bound |
+| `until` | ISO 8601 | Exclusive upper bound |
+
+Bounds compare as text against the stored timestamps, so a bare date
+(`2026-09-01`) works — the format sorts lexicographically. Responds with
+`text/csv` and a `Content-Disposition` attachment header; rows are ordered by
+time.
+
+```bash
+curl -H "Authorization: Bearer $INGEST_AUTH_TOKEN" \
+  'http://localhost:9585/api/export.csv?since=2026-09-01' -o usage.csv
+```
+
 ### `GET /api/fleet`
 
 Which Claude Code versions and terminals are reporting. All time, no `hours`

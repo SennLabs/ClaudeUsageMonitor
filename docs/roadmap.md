@@ -16,7 +16,7 @@ item — this is a list of options, not a plan of record.
 - [x] [R0. Attribute projects with `OTEL_RESOURCE_ATTRIBUTES` instead of mapping user IDs](#r0-attribute-projects-with-otel_resource_attributes-instead-of-mapping-user-ids) — *done*
 - [x] [R1. Move settings server-side](#r1-move-settings-server-side) — *done*
 - [ ] [R2. Retention and daily rollups](#r2-retention-and-daily-rollups) — *partial*
-- [ ] [R3. Surface cache efficiency](#r3-surface-cache-efficiency)
+- [x] [R3. Surface cache efficiency](#r3-surface-cache-efficiency) — *done*
 - [x] [R4. Event de-duplication](#r4-event-de-duplication) — *done*
 
 **Telemetry coverage — data Claude Code already sends**
@@ -26,11 +26,11 @@ item — this is a list of options, not a plan of record.
 - [x] [R19. Surface errors and refusals](#r19-surface-errors-and-refusals) — *done*
 - [x] [R20. Surface tool performance](#r20-surface-tool-performance) — *done*
 - [x] [R21. Cost attribution by agent, skill and MCP server](#r21-cost-attribution-by-agent-skill-and-mcp-server) — *done*
-- [ ] [R22. Per-prompt cost](#r22-per-prompt-cost) — *partial*
+- [x] [R22. Per-prompt cost](#r22-per-prompt-cost) — *done*
 - [x] [R23. Fleet visibility](#r23-fleet-visibility) — *done*
 - [ ] [R24. Ingest the metrics stream](#r24-ingest-the-metrics-stream)
 - [ ] [R25. Derived productivity metrics](#r25-derived-productivity-metrics)
-- [ ] [R26. Security and audit view](#r26-security-and-audit-view)
+- [x] [R26. Security and audit view](#r26-security-and-audit-view) — *done*
 - [ ] [R27. Document the client-side content flags](#r27-document-the-client-side-content-flags)
 
 **Worth considering**
@@ -38,7 +38,7 @@ item — this is a list of options, not a plan of record.
 - [ ] [R5. A `/metrics` endpoint for Prometheus](#r5-a-metrics-endpoint-for-prometheus)
 - [ ] [R6. Per-client tokens](#r6-per-client-tokens)
 - [ ] [R7. Scheduled digest](#r7-scheduled-digest)
-- [ ] [R8. CSV / JSON export](#r8-csv--json-export)
+- [x] [R8. CSV / JSON export](#r8-csv--json-export) — *done*
 - [ ] [R9. Session lifecycle and duration](#r9-session-lifecycle-and-duration)
 - [ ] [R10. Display timezone setting](#r10-display-timezone-setting)
 
@@ -136,6 +136,10 @@ that alone reclaims most of the space while keeping the numbers.
 **Effort.** Moderate. Pairs naturally with the existing `_purge_loop`.
 
 ### R3. Surface cache efficiency
+
+*Status: **done**.*
+
+**Done 2026-09-10.** `GET /api/cache-efficiency` returns the hit ratio overall and per project, shown as its own panel on `/insights` with a colour cue below 50%. The data had been collected since the first commit.
 
 **Problem.** `cache_read_tokens` and `cache_creation_tokens` are captured on
 every event and almost entirely unused: one summary card shows cache reads, and
@@ -256,9 +260,9 @@ set on the client. Plan for those buckets rather than treating them as one agent
 
 ### R22. Per-prompt cost
 
-*Status: **partial**.*
+*Status: **done**.*
 
-**Unblocked 2026-09-10.** `prompt_id` is now a column and backfilled, so grouping by it is a query away. No endpoint or view yet.
+**Done 2026-09-10.** `GET /api/prompts` groups by `prompt_id` and ranks by cost; shown as a panel on `/insights`.
 
 Every event from a single user prompt shares a `prompt.id`. Grouping on it makes
 "what did that one question cost" answerable, which is the question people
@@ -310,6 +314,10 @@ these say whether it bought anything, and they are what someone outside the team
 will ask for.
 
 ### R26. Security and audit view
+
+*Status: **done**.*
+
+**Done 2026-09-10.** `GET /api/audit` covers permission-mode changes, failed logins and MCP connectivity. Transitions into `bypassPermissions` are counted separately and raised as a banner rather than buried in a table.
 
 Three event types are already arriving and have nothing to do with cost:
 
@@ -393,6 +401,10 @@ immediately rather than waiting for the digest.
 **Depends on** R1 for server-evaluable thresholds.
 
 ### R8. CSV / JSON export
+
+*Status: **done**.*
+
+**Done 2026-09-10.** `GET /api/export.csv?since=&until=`, streamed, joined to each session's project, with an Export button on `/insights`. JSON was not added — the existing endpoints already return it.
 
 **Problem.** The first time someone asks you to justify the spend, you will be
 copying numbers out of a web page.

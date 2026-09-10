@@ -1,10 +1,14 @@
 import { createEffect, createResource, createSignal, For, onCleanup, Show } from 'solid-js'
 import type { AttributionRow } from '../api'
 import {
+  exportCsvUrl,
   fetchAttribution,
+  fetchAudit,
+  fetchCacheEfficiency,
   fetchErrorStats,
   fetchFleet,
   fetchLatency,
+  fetchPrompts,
   fetchToolStats,
 } from '../api'
 import { formatCost, formatNumber, formatTime } from '../format'
@@ -94,6 +98,15 @@ export default function InsightsPage() {
     fetchToolStats(WINDOW_HOURS[w]),
   )
   const [fleet, { refetch: refetchFleet }] = createResource(fetchFleet)
+  const [cache, { refetch: refetchCache }] = createResource(activeWindow, (w) =>
+    fetchCacheEfficiency(WINDOW_HOURS[w]),
+  )
+  const [prompts, { refetch: refetchPrompts }] = createResource(activeWindow, (w) =>
+    fetchPrompts(WINDOW_HOURS[w]),
+  )
+  const [audit, { refetch: refetchAudit }] = createResource(activeWindow, (w) =>
+    fetchAudit(WINDOW_HOURS[w]),
+  )
 
   createEffect(() => {
     const timer = setInterval(() => {
@@ -102,12 +115,17 @@ export default function InsightsPage() {
       refetchErrors()
       refetchTools()
       refetchFleet()
+      refetchCache()
+      refetchPrompts()
+      refetchAudit()
     }, settings().refreshIntervalMs)
     onCleanup(() => clearInterval(timer))
   })
 
-  const apiError = () => firstError(attribution, latency, errors, tools, fleet)
+  const apiError = () =>
+    firstError(attribution, latency, errors, tools, fleet, cache, prompts, audit)
   const ms = (v: number | null | undefined) => (v == null ? '—' : `${formatNumber(v)} ms`)
+  const pct = (v: number | null | undefined) => (v == null ? '—' : `${(v * 100).toFixed(1)}%`)
 
   return (
     <div class="min-h-screen">
@@ -142,6 +160,12 @@ export default function InsightsPage() {
                 )}
               </For>
             </div>
+            <a
+              href={exportCsvUrl()}
+              class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Export CSV
+            </a>
             <ThemeToggle />
           </div>
         </div>
@@ -154,6 +178,70 @@ export default function InsightsPage() {
           <code class="font-mono text-xs">raw_attributes</code>. Rows read{' '}
           <code class="font-mono text-xs">(none)</code> when the attribute was absent.
         </p>
+
+        <Show when={(latest(audit)?.bypass_count ?? 0) > 0}>
+          <div class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+            <strong>{latest(audit)!.bypass_count}</strong> session(s) entered{' '}
+            <code class="font-mono text-xs">bypassPermissions</code> in this window. See the audit
+            panel below.
+          </div>
+        </Show>
+
+        <Panel
+          title="Cache efficiency"
+          hint="Cached input is billed at a fraction of uncached. One of the few levers that actually moves the bill."
+        >
+          <Show when={latest(cache)} fallback={<Empty>No requests in this window.</Empty>}>
+            {(c) => (
+              <>
+                <div class="grid grid-cols-4 gap-3">
+                  <Stat
+                    label="hit ratio"
+                    value={pct(c().overall.hit_ratio)}
+                    accent={
+                      c().overall.hit_ratio !== null && c().overall.hit_ratio! < 0.5
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }
+                  />
+                  <Stat label="from cache" value={formatNumber(c().overall.cache_read_tokens)} />
+                  <Stat label="uncached" value={formatNumber(c().overall.uncached_input_tokens)} />
+                  <Stat label="cache writes" value={formatNumber(c().overall.cache_creation_tokens)} />
+                </div>
+                <Show when={c().by_project.length > 0}>
+                  <table class="mt-4 w-full text-sm">
+                    <thead>
+                      <tr class="text-left text-xs text-slate-500 dark:text-slate-400">
+                        <th class="py-1 font-medium">Project</th>
+                        <th class="py-1 text-right font-medium">Hit ratio</th>
+                        <th class="py-1 text-right font-medium">From cache</th>
+                        <th class="py-1 text-right font-medium">Uncached</th>
+                        <th class="py-1 text-right font-medium">Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                      <For each={c().by_project}>
+                        {(row) => (
+                          <tr>
+                            <td class="py-1.5 text-slate-800 dark:text-slate-200">{row.name}</td>
+                            <td class="py-1.5 text-right tabular-nums">{pct(row.hit_ratio)}</td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-500">
+                              {formatNumber(row.cache_read_tokens)}
+                            </td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-500">
+                              {formatNumber(row.uncached_input_tokens)}
+                            </td>
+                            <td class="py-1.5 text-right tabular-nums">{formatCost(row.cost_usd)}</td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </Show>
+              </>
+            )}
+          </Show>
+        </Panel>
 
         <div class="grid gap-6 md:grid-cols-2">
           <Panel title="API latency" hint={`Requests in the last ${hours() === 0 ? 'all time' : `${hours()}h`}`}>
@@ -316,6 +404,125 @@ export default function InsightsPage() {
                   </For>
                 </tbody>
               </table>
+            </div>
+          </Show>
+        </Panel>
+        <Panel
+          title="Most expensive prompts"
+          hint="Every event of one user prompt shares a prompt.id, so this is what a single question cost."
+        >
+          <Show when={(latest(prompts) ?? []).length > 0} fallback={<Empty>No prompt IDs in this window.</Empty>}>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-xs text-slate-500 dark:text-slate-400">
+                    <th class="py-1 font-medium">Started</th>
+                    <th class="py-1 font-medium">Project</th>
+                    <th class="py-1 text-right font-medium">Requests</th>
+                    <th class="py-1 text-right font-medium">Tokens</th>
+                    <th class="py-1 text-right font-medium">Cost</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                  <For each={latest(prompts) ?? []}>
+                    {(row) => (
+                      <tr title={row.prompt_id}>
+                        <td class="py-1.5 text-slate-500 dark:text-slate-400">
+                          {formatTime(row.started_at)}
+                        </td>
+                        <td class="py-1.5 text-slate-800 dark:text-slate-200">{row.project_name}</td>
+                        <td class="py-1.5 text-right tabular-nums">{formatNumber(row.requests)}</td>
+                        <td class="py-1.5 text-right tabular-nums text-slate-500">
+                          {formatNumber(row.total_tokens)}
+                        </td>
+                        <td class="py-1.5 text-right tabular-nums">{formatCost(row.cost_usd)}</td>
+                      </tr>
+                    )}
+                  </For>
+                </tbody>
+              </table>
+            </div>
+          </Show>
+        </Panel>
+
+        <Panel
+          title="Audit"
+          hint="Permission-mode changes, failed logins and MCP connectivity — nothing to do with cost."
+        >
+          <Show
+            when={
+              (latest(audit)?.permission_changes.length ?? 0) > 0 ||
+              (latest(audit)?.auth_failures.length ?? 0) > 0 ||
+              (latest(audit)?.mcp_connections.length ?? 0) > 0
+            }
+            fallback={<Empty>No audit events in this window.</Empty>}
+          >
+            <div class="space-y-4">
+              <Show when={(latest(audit)?.permission_changes.length ?? 0) > 0}>
+                <div>
+                  <p class="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    Permission mode changes
+                  </p>
+                  <div class="mt-1 space-y-1">
+                    <For each={latest(audit)!.permission_changes.slice(0, 10)}>
+                      {(c) => (
+                        <div
+                          class="flex items-baseline justify-between text-sm"
+                          classList={{
+                            'text-amber-700 dark:text-amber-400': c.to_mode === 'bypassPermissions',
+                            'text-slate-700 dark:text-slate-300': c.to_mode !== 'bypassPermissions',
+                          }}
+                        >
+                          <span class="font-mono text-xs">
+                            {c.from_mode} → {c.to_mode}
+                            <span class="ml-2 text-slate-400 dark:text-slate-600">{c.trigger}</span>
+                          </span>
+                          <span class="text-xs text-slate-500">{formatTime(c.occurred_at)}</span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </Show>
+              <Show when={(latest(audit)?.auth_failures.length ?? 0) > 0}>
+                <div>
+                  <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Failed logins</p>
+                  <div class="mt-1 space-y-1">
+                    <For each={latest(audit)!.auth_failures.slice(0, 10)}>
+                      {(a) => (
+                        <div class="flex items-baseline justify-between text-sm text-red-700 dark:text-red-400">
+                          <span class="font-mono text-xs">
+                            {a.action} — {a.error_category ?? 'unknown'}
+                          </span>
+                          <span class="text-xs text-slate-500">{formatTime(a.occurred_at)}</span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </Show>
+              <Show when={(latest(audit)?.mcp_connections.length ?? 0) > 0}>
+                <div>
+                  <p class="text-xs font-medium text-slate-500 dark:text-slate-400">MCP servers</p>
+                  <div class="mt-1 flex flex-wrap gap-2">
+                    <For each={latest(audit)!.mcp_connections}>
+                      {(m) => (
+                        <span
+                          class="rounded px-2 py-0.5 text-xs"
+                          classList={{
+                            'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300':
+                              m.status === 'failed',
+                            'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400':
+                              m.status !== 'failed',
+                          }}
+                        >
+                          {m.server} · {m.status} · {m.transport} × {m.n}
+                        </span>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </Show>
             </div>
           </Show>
         </Panel>
