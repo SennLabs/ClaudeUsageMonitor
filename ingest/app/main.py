@@ -224,6 +224,33 @@ async def remove_user_project(user_id: str, clear_sessions: bool = False):
     return {"ok": True}
 
 
+# ── Insights ───────────────────────────────────────────────────────────────
+
+@app.get("/api/attribution", dependencies=[Depends(require_auth)])
+async def get_attribution(hours: int = 24):
+    return db.fetch_attribution(hours=_window(hours))
+
+
+@app.get("/api/latency", dependencies=[Depends(require_auth)])
+async def get_latency(hours: int = 24):
+    return db.fetch_latency(hours=_window(hours))
+
+
+@app.get("/api/errors", dependencies=[Depends(require_auth)])
+async def get_errors(hours: int = 24):
+    return db.fetch_errors(hours=_window(hours))
+
+
+@app.get("/api/tools", dependencies=[Depends(require_auth)])
+async def get_tools(hours: int = 24):
+    return db.fetch_tool_stats(hours=_window(hours))
+
+
+@app.get("/api/fleet", dependencies=[Depends(require_auth)])
+async def get_fleet():
+    return db.fetch_fleet()
+
+
 # ── Dashboard settings ─────────────────────────────────────────────────────
 
 @app.get("/api/settings", dependencies=[Depends(require_auth)])

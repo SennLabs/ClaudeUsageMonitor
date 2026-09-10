@@ -22,12 +22,12 @@ item — this is a list of options, not a plan of record.
 **Telemetry coverage — data Claude Code already sends**
 
 - [x] [R17. Store cost as integer micros](#r17-store-cost-as-integer-micros) — *done*
-- [ ] [R18. Promote the attributes already being received](#r18-promote-the-attributes-already-being-received)
-- [ ] [R19. Surface errors and refusals](#r19-surface-errors-and-refusals)
-- [ ] [R20. Surface tool performance](#r20-surface-tool-performance)
-- [ ] [R21. Cost attribution by agent, skill and MCP server](#r21-cost-attribution-by-agent-skill-and-mcp-server)
-- [ ] [R22. Per-prompt cost](#r22-per-prompt-cost)
-- [ ] [R23. Fleet visibility](#r23-fleet-visibility)
+- [x] [R18. Promote the attributes already being received](#r18-promote-the-attributes-already-being-received) — *done*
+- [x] [R19. Surface errors and refusals](#r19-surface-errors-and-refusals) — *done*
+- [x] [R20. Surface tool performance](#r20-surface-tool-performance) — *done*
+- [x] [R21. Cost attribution by agent, skill and MCP server](#r21-cost-attribution-by-agent-skill-and-mcp-server) — *done*
+- [ ] [R22. Per-prompt cost](#r22-per-prompt-cost) — *partial*
+- [x] [R23. Fleet visibility](#r23-fleet-visibility) — *done*
 - [ ] [R24. Ingest the metrics stream](#r24-ingest-the-metrics-stream)
 - [ ] [R25. Derived productivity metrics](#r25-derived-productivity-metrics)
 - [ ] [R26. Security and audit view](#r26-security-and-audit-view)
@@ -193,6 +193,10 @@ display time. Backfill from `raw_attributes`.
 
 ### R18. Promote the attributes already being received
 
+*Status: **done**.*
+
+**Done 2026-09-10.** Twelve attributes promoted to columns with a backfill from `raw_attributes` on startup: `duration_ms`, `query_source`, `effort`, `speed`, `agent_name`, `skill_name`, `mcp_server_name`, `prompt_id`, `app_version`, `terminal_type`, `tool_name`, `status_code`. Read queries still aggregate `cost_usd` rather than `cost_usd_micros` — that swap is left for when the rollup work in [R2](#r2-retention-and-daily-rollups) touches those queries anyway.
+
 Four attributes on `claude_code.api_request` are stored but unusable:
 
 | Attribute | Unlocks |
@@ -207,6 +211,10 @@ the procedure in [Data model](data-model.md#otlp-attribute-mapping).
 
 ### R19. Surface errors and refusals
 
+*Status: **done**.*
+
+**Done 2026-09-10.** `GET /api/errors` returns error rate, retry count, HTTP status breakdown and refusal categories; shown on `/insights`.
+
 `claude_code.api_error` (`status_code`, `attempt`, `error`, `duration_ms`) and
 `claude_code.api_refusal` (`category`, `server_fallback_hop`, `attempt`) are
 already being ingested and rendered nowhere.
@@ -218,12 +226,20 @@ signal for the duplicate-event problem in
 
 ### R20. Surface tool performance
 
+*Status: **done**.*
+
+**Done 2026-09-10.** `GET /api/tools` returns calls, failures and duration per tool; shown on `/insights`.
+
 `claude_code.tool_result` carries `tool_name`, `success`, `duration_ms`,
 `error_type`, `tool_use_id`, and input/result sizes. That answers "which tools
 are slow" and "which tools fail, and how" — neither of which is visible today,
 despite the data being present.
 
 ### R21. Cost attribution by agent, skill and MCP server
+
+*Status: **done**.*
+
+**Done 2026-09-10.** `GET /api/attribution` splits cost by query source, agent, skill, MCP server, effort and speed. Claude Code's own redaction is documented on the page — user-defined agents arrive as `custom`.
 
 `claude_code.api_request` carries `agent.name`, `skill.name`, `plugin.name`,
 `marketplace.name`, `mcp_server.name` and `mcp_tool.name`. These are a genuinely
@@ -236,11 +252,19 @@ set on the client. Plan for those buckets rather than treating them as one agent
 
 ### R22. Per-prompt cost
 
+*Status: **partial**.*
+
+**Unblocked 2026-09-10.** `prompt_id` is now a column and backfilled, so grouping by it is a query away. No endpoint or view yet.
+
 Every event from a single user prompt shares a `prompt.id`. Grouping on it makes
 "what did that one question cost" answerable, which is the question people
 actually ask when a bill looks wrong. Cheap to add once R18 lands.
 
 ### R23. Fleet visibility
+
+*Status: **done**.*
+
+**Done 2026-09-10.** `GET /api/fleet` lists reporting Claude Code versions and terminal types with session counts and last-seen times.
 
 `app.version` and `terminal.type` are on every event (`app.version` requires
 `OTEL_METRICS_INCLUDE_VERSION=true` for metrics, but is present on events).

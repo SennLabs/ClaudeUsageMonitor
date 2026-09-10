@@ -54,6 +54,18 @@ def init_db() -> None:
             "ALTER TABLE usage_events ADD COLUMN cost_usd_micros INTEGER",
             "ALTER TABLE usage_events ADD COLUMN event_hash TEXT",
             "ALTER TABLE sessions ADD COLUMN project_source TEXT",
+            "ALTER TABLE usage_events ADD COLUMN duration_ms INTEGER",
+            "ALTER TABLE usage_events ADD COLUMN query_source TEXT",
+            "ALTER TABLE usage_events ADD COLUMN effort TEXT",
+            "ALTER TABLE usage_events ADD COLUMN speed TEXT",
+            "ALTER TABLE usage_events ADD COLUMN agent_name TEXT",
+            "ALTER TABLE usage_events ADD COLUMN skill_name TEXT",
+            "ALTER TABLE usage_events ADD COLUMN mcp_server_name TEXT",
+            "ALTER TABLE usage_events ADD COLUMN prompt_id TEXT",
+            "ALTER TABLE usage_events ADD COLUMN app_version TEXT",
+            "ALTER TABLE usage_events ADD COLUMN terminal_type TEXT",
+            "ALTER TABLE usage_events ADD COLUMN tool_name TEXT",
+            "ALTER TABLE usage_events ADD COLUMN status_code INTEGER",
         ):
             try:
                 conn.execute(stmt)
@@ -77,6 +89,55 @@ def init_db() -> None:
                    END
              WHERE project_name IS NOT NULL AND project_source IS NULL
             """
+        )
+        # Recover attributes that were only ever stored in raw_attributes.
+        conn.execute(
+            "UPDATE usage_events SET duration_ms = json_extract(raw_attributes, '$.\"duration_ms\"') "
+            "WHERE duration_ms IS NULL AND json_extract(raw_attributes, '$.\"duration_ms\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET query_source = json_extract(raw_attributes, '$.\"query_source\"') "
+            "WHERE query_source IS NULL AND json_extract(raw_attributes, '$.\"query_source\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET effort = json_extract(raw_attributes, '$.\"effort\"') "
+            "WHERE effort IS NULL AND json_extract(raw_attributes, '$.\"effort\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET speed = json_extract(raw_attributes, '$.\"speed\"') "
+            "WHERE speed IS NULL AND json_extract(raw_attributes, '$.\"speed\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET agent_name = json_extract(raw_attributes, '$.\"agent.name\"') "
+            "WHERE agent_name IS NULL AND json_extract(raw_attributes, '$.\"agent.name\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET skill_name = json_extract(raw_attributes, '$.\"skill.name\"') "
+            "WHERE skill_name IS NULL AND json_extract(raw_attributes, '$.\"skill.name\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET mcp_server_name = json_extract(raw_attributes, '$.\"mcp_server.name\"') "
+            "WHERE mcp_server_name IS NULL AND json_extract(raw_attributes, '$.\"mcp_server.name\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET prompt_id = json_extract(raw_attributes, '$.\"prompt.id\"') "
+            "WHERE prompt_id IS NULL AND json_extract(raw_attributes, '$.\"prompt.id\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET app_version = json_extract(raw_attributes, '$.\"app.version\"') "
+            "WHERE app_version IS NULL AND json_extract(raw_attributes, '$.\"app.version\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET terminal_type = json_extract(raw_attributes, '$.\"terminal.type\"') "
+            "WHERE terminal_type IS NULL AND json_extract(raw_attributes, '$.\"terminal.type\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET tool_name = json_extract(raw_attributes, '$.\"tool_name\"') "
+            "WHERE tool_name IS NULL AND json_extract(raw_attributes, '$.\"tool_name\"') IS NOT NULL"
+        )
+        conn.execute(
+            "UPDATE usage_events SET status_code = json_extract(raw_attributes, '$.\"status_code\"') "
+            "WHERE status_code IS NULL AND json_extract(raw_attributes, '$.\"status_code\"') IS NOT NULL"
         )
         _backfill_event_hashes(conn)
 
@@ -295,8 +356,10 @@ def write_events(events: list[LogEvent]) -> tuple[int, int]:
             INSERT OR IGNORE INTO usage_events (
                 session_id, occurred_at, event_name, model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                cost_usd, cost_usd_micros, raw_attributes, event_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                cost_usd, cost_usd_micros, raw_attributes, event_hash,
+                duration_ms, query_source, effort, speed, agent_name, skill_name,
+                mcp_server_name, prompt_id, app_version, terminal_type, tool_name, status_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -312,6 +375,18 @@ def write_events(events: list[LogEvent]) -> tuple[int, int]:
                     event.cost_usd_micros,
                     json.dumps(event.raw_attributes, sort_keys=True),
                     event_hash(event),
+                    event.duration_ms,
+                    event.query_source,
+                    event.effort,
+                    event.speed,
+                    event.agent_name,
+                    event.skill_name,
+                    event.mcp_server_name,
+                    event.prompt_id,
+                    event.app_version,
+                    event.terminal_type,
+                    event.tool_name,
+                    event.status_code,
                 )
                 for event in events
             ],
@@ -618,7 +693,17 @@ def fetch_summary(active_within_minutes: int | None = None) -> dict:
             "SELECT COUNT(*) AS active_sessions FROM sessions WHERE last_seen_at >= ?",
             (_cutoff(minutes),),
         ).fetchone()
-        return {**dict(totals), **dict(active)}
+        # Events that arrived with no session.id reach no per-session or
+        # per-user view, so the headline and those views used to disagree with
+        # no indication. Report the gap rather than hiding it.
+        unattributed = conn.execute(
+            """
+            SELECT COUNT(*)                   AS unattributed_events,
+                   COALESCE(SUM(cost_usd), 0) AS unattributed_cost_usd
+              FROM usage_events WHERE session_id IS NULL
+            """
+        ).fetchone()
+        return {**dict(totals), **dict(active), **dict(unattributed)}
 
 
 def fetch_sessions(limit: int = 100) -> list[dict]:
@@ -665,6 +750,183 @@ def fetch_usage_by_model() -> list[dict]:
             """
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+
+# ── Insight queries ────────────────────────────────────────────────────────
+# Everything below reads attributes Claude Code has always sent. They were
+# stored in raw_attributes from the start; promoting them to columns is what
+# made these aggregations possible.
+
+def fetch_attribution(hours: int | None = 24) -> dict:
+    """Cost split by the dimensions other than model and project."""
+    where, params = _window_clause(hours)
+    clause = where.format(col="occurred_at")
+    joiner = "AND" if clause else "WHERE"
+
+    def by(conn: sqlite3.Connection, column: str) -> list[dict]:
+        rows = conn.execute(
+            f"""
+            SELECT COALESCE({column}, '(none)')        AS name,
+                   COUNT(*)                            AS requests,
+                   COALESCE(SUM(cost_usd), 0)          AS cost_usd,
+                   COALESCE(SUM(COALESCE(input_tokens,0)
+                              + COALESCE(output_tokens,0)), 0) AS total_tokens
+              FROM usage_events
+              {clause}
+              {joiner} event_name = 'claude_code.api_request'
+             GROUP BY {column}
+             ORDER BY cost_usd DESC
+             LIMIT 20
+            """,
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # Column names here are code literals, never request input.
+    dimensions = {
+        "by_query_source": "query_source",
+        "by_agent": "agent_name",
+        "by_skill": "skill_name",
+        "by_mcp_server": "mcp_server_name",
+        "by_effort": "effort",
+        "by_speed": "speed",
+    }
+    with _connect() as conn:
+        return {key: by(conn, column) for key, column in dimensions.items()}
+
+
+def fetch_latency(hours: int | None = 24) -> dict:
+    """API request latency. SQLite has no percentile function, so p50/p95 are
+    read positionally out of the ordered set."""
+    where, params = _window_clause(hours)
+    clause = where.format(col="occurred_at")
+    joiner = "AND" if clause else "WHERE"
+    base = f"FROM usage_events {clause} {joiner} event_name = 'claude_code.api_request' AND duration_ms IS NOT NULL"
+
+    with _connect() as conn:
+        agg = conn.execute(
+            f"SELECT COUNT(*) AS n, AVG(duration_ms) AS avg_ms, MAX(duration_ms) AS max_ms {base}",
+            params,
+        ).fetchone()
+        n = agg["n"] or 0
+        if n == 0:
+            return {"requests": 0, "avg_ms": None, "p50_ms": None, "p95_ms": None, "max_ms": None}
+
+        def pct(fraction: float) -> int:
+            offset = min(n - 1, int(n * fraction))
+            row = conn.execute(
+                f"SELECT duration_ms {base} ORDER BY duration_ms LIMIT 1 OFFSET ?",
+                (*params, offset),
+            ).fetchone()
+            return row["duration_ms"]
+
+        return {
+            "requests": n,
+            "avg_ms": round(agg["avg_ms"]),
+            "p50_ms": pct(0.50),
+            "p95_ms": pct(0.95),
+            "max_ms": agg["max_ms"],
+        }
+
+
+def fetch_errors(hours: int | None = 24) -> dict:
+    """Failed and refused API requests, and how often they were retried."""
+    where, params = _window_clause(hours)
+    clause = where.format(col="occurred_at")
+    joiner = "AND" if clause else "WHERE"
+
+    with _connect() as conn:
+        counts = conn.execute(
+            f"""
+            SELECT
+                SUM(event_name = 'claude_code.api_request') AS requests,
+                SUM(event_name = 'claude_code.api_error')   AS errors,
+                SUM(event_name = 'claude_code.api_refusal') AS refusals,
+                SUM(CAST(COALESCE(json_extract(raw_attributes, '$.attempt'), 1) AS INTEGER) > 1) AS retried
+              FROM usage_events {clause}
+            """,
+            params,
+        ).fetchone()
+
+        by_status = [
+            dict(r)
+            for r in conn.execute(
+                f"""
+                SELECT COALESCE(status_code, 0) AS status_code, COUNT(*) AS n
+                  FROM usage_events {clause} {joiner} event_name = 'claude_code.api_error'
+                 GROUP BY status_code ORDER BY n DESC LIMIT 10
+                """,
+                params,
+            ).fetchall()
+        ]
+        by_category = [
+            dict(r)
+            for r in conn.execute(
+                f"""
+                SELECT COALESCE(json_extract(raw_attributes, '$.category'), '(undisclosed)') AS category,
+                       COUNT(*) AS n
+                  FROM usage_events {clause} {joiner} event_name = 'claude_code.api_refusal'
+                 GROUP BY category ORDER BY n DESC LIMIT 10
+                """,
+                params,
+            ).fetchall()
+        ]
+
+    total = (counts["requests"] or 0) + (counts["errors"] or 0)
+    return {
+        "requests": counts["requests"] or 0,
+        "errors": counts["errors"] or 0,
+        "refusals": counts["refusals"] or 0,
+        "retried": counts["retried"] or 0,
+        "error_rate": round((counts["errors"] or 0) / total, 4) if total else 0.0,
+        "by_status_code": by_status,
+        "by_refusal_category": by_category,
+    }
+
+
+def fetch_tool_stats(hours: int | None = 24) -> list[dict]:
+    """Per-tool call counts, failure rate and duration."""
+    where, params = _window_clause(hours)
+    clause = where.format(col="occurred_at")
+    joiner = "AND" if clause else "WHERE"
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                COALESCE(tool_name, '(unknown)')  AS tool_name,
+                COUNT(*)                          AS calls,
+                SUM(json_extract(raw_attributes, '$.success') = 'false') AS failures,
+                ROUND(AVG(duration_ms))           AS avg_ms,
+                MAX(duration_ms)                  AS max_ms
+              FROM usage_events
+              {clause}
+              {joiner} event_name = 'claude_code.tool_result'
+             GROUP BY tool_name
+             ORDER BY calls DESC
+             LIMIT 30
+            """,
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def fetch_fleet() -> list[dict]:
+    """Which Claude Code versions and terminals are reporting."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(app_version, '(unreported)')   AS app_version,
+                   COALESCE(terminal_type, '(unreported)') AS terminal_type,
+                   COUNT(DISTINCT session_id)              AS sessions,
+                   MAX(occurred_at)                        AS last_seen_at
+              FROM usage_events
+             GROUP BY app_version, terminal_type
+             ORDER BY last_seen_at DESC
+             LIMIT 50
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def _time_bucket_fmt(hours: int | None) -> str:

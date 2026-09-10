@@ -7,6 +7,7 @@ import App from './App.tsx'
 import TabletDashboard from './components/TabletDashboard.tsx'
 import SettingsPage from './components/SettingsPage.tsx'
 import UsersPage from './components/UsersPage.tsx'
+import InsightsPage from './components/InsightsPage.tsx'
 
 const root = document.getElementById('root')
 
@@ -45,6 +46,7 @@ render(
         <Route path="/tablet" component={TabletDashboard} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/users" component={UsersPage} />
+        <Route path="/insights" component={InsightsPage} />
       </Router>
     </ErrorBoundary>
   ),

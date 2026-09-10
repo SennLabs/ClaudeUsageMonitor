@@ -77,6 +77,18 @@ One row per received log record. Append-only — nothing updates or deletes here
 | `cost_usd_micros` | INTEGER | The same figure in exact millionths — aggregate on this, not on the float |
 | `raw_attributes` | TEXT | JSON of the complete merged attribute map, key-sorted |
 | `event_hash` | TEXT | SHA-256 identity digest, unique — see below |
+| `duration_ms` | INTEGER | API request duration |
+| `query_source` | TEXT | `main` / `subagent` / `auxiliary` |
+| `effort` | TEXT | `low` … `max` |
+| `speed` | TEXT | `fast` / `normal` |
+| `agent_name` | TEXT | From `agent.name`; user-defined agents report as `custom` |
+| `skill_name` | TEXT | From `skill.name`; third-party skills report as `third-party` |
+| `mcp_server_name` | TEXT | From `mcp_server.name` |
+| `prompt_id` | TEXT | From `prompt.id`; links every event of one user prompt |
+| `app_version` | TEXT | Claude Code version |
+| `terminal_type` | TEXT | `vscode`, `iTerm.app`, `tmux`, … |
+| `tool_name` | TEXT | On `claude_code.tool_result` events |
+| `status_code` | INTEGER | On `claude_code.api_error` events |
 
 ### Event de-duplication
 
@@ -114,6 +126,7 @@ CREATE INDEX        idx_usage_events_session ON usage_events(session_id);
 CREATE INDEX        idx_usage_events_time    ON usage_events(occurred_at);
 CREATE INDEX        idx_sessions_user        ON sessions(user_id);
 CREATE UNIQUE INDEX idx_usage_events_hash    ON usage_events(event_hash);  -- from init_db()
+CREATE INDEX        idx_usage_events_name    ON usage_events(event_name);
 ```
 
 The time index is what keeps the windowed chart queries cheap as the table
@@ -157,6 +170,18 @@ columns via `_ATTR_ALIASES`:
 | `cache_creation_tokens`, `cache_creation_input_tokens` | `cache_creation_tokens` |
 | `cost_usd` | `cost_usd` |
 | `cost_usd_micros` | `cost_usd_micros` |
+| `duration_ms` | `duration_ms` |
+| `query_source` | `query_source` |
+| `effort` | `effort` |
+| `speed` | `speed` |
+| `agent.name` | `agent_name` |
+| `skill.name` | `skill_name` |
+| `mcp_server.name` | `mcp_server_name` |
+| `prompt.id` | `prompt_id` |
+| `app.version` | `app_version` |
+| `terminal.type` | `terminal_type` |
+| `tool_name` | `tool_name` |
+| `status_code` | `status_code` |
 | `project`, `project.name`, `project_name` | `project_name` (from `OTEL_RESOURCE_ATTRIBUTES`) |
 
 The duplicate entries are version aliases — exporter attribute naming has

@@ -1,3 +1,59 @@
+export interface AttributionRow {
+  name: string
+  requests: number
+  cost_usd: number
+  total_tokens: number
+}
+
+export interface Attribution {
+  by_query_source: AttributionRow[]
+  by_agent: AttributionRow[]
+  by_skill: AttributionRow[]
+  by_mcp_server: AttributionRow[]
+  by_effort: AttributionRow[]
+  by_speed: AttributionRow[]
+}
+
+export interface Latency {
+  requests: number
+  avg_ms: number | null
+  p50_ms: number | null
+  p95_ms: number | null
+  max_ms: number | null
+}
+
+export interface ErrorStats {
+  requests: number
+  errors: number
+  refusals: number
+  retried: number
+  error_rate: number
+  by_status_code: { status_code: number; n: number }[]
+  by_refusal_category: { category: string; n: number }[]
+}
+
+export interface ToolStat {
+  tool_name: string
+  calls: number
+  failures: number
+  avg_ms: number | null
+  max_ms: number | null
+}
+
+export interface FleetRow {
+  app_version: string
+  terminal_type: string
+  sessions: number
+  last_seen_at: string
+}
+
+export const fetchAttribution = (hours = 24) =>
+  getJSON<Attribution>(`/attribution?hours=${hours}`)
+export const fetchLatency = (hours = 24) => getJSON<Latency>(`/latency?hours=${hours}`)
+export const fetchErrorStats = (hours = 24) => getJSON<ErrorStats>(`/errors?hours=${hours}`)
+export const fetchToolStats = (hours = 24) => getJSON<ToolStat[]>(`/tools?hours=${hours}`)
+export const fetchFleet = () => getJSON<FleetRow[]>('/fleet')
+
 export interface Summary {
   total_sessions: number
   total_input_tokens: number
@@ -6,6 +62,9 @@ export interface Summary {
   total_cache_creation_tokens: number
   total_cost_usd: number
   active_sessions: number
+  /** Events that arrived with no session.id — counted here but in no other view. */
+  unattributed_events: number
+  unattributed_cost_usd: number
 }
 
 export interface SessionRow {

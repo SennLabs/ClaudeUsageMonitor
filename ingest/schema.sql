@@ -24,6 +24,20 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cache_creation_tokens  INTEGER,
     cost_usd               REAL,
     cost_usd_micros        INTEGER,
+    -- Attributes Claude Code has always sent. They were captured in
+    -- raw_attributes but unusable in aggregate queries; see docs/data-model.md.
+    duration_ms            INTEGER,
+    query_source           TEXT,     -- main | subagent | auxiliary
+    effort                 TEXT,     -- low | medium | high | xhigh | max
+    speed                  TEXT,     -- fast | normal
+    agent_name             TEXT,
+    skill_name             TEXT,
+    mcp_server_name        TEXT,
+    prompt_id              TEXT,
+    app_version            TEXT,
+    terminal_type          TEXT,
+    tool_name              TEXT,
+    status_code            INTEGER,
     raw_attributes         TEXT,
     -- Stable digest of the record's identity. An OTLP exporter retries a 5xx
     -- by resending the identical batch, so without this a transient failure
@@ -53,3 +67,5 @@ CREATE TABLE IF NOT EXISTS app_settings (
 CREATE INDEX IF NOT EXISTS idx_usage_events_session ON usage_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_usage_events_time ON usage_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+-- Every non-cost view filters by event type first.
+CREATE INDEX IF NOT EXISTS idx_usage_events_name ON usage_events(event_name);

@@ -7,6 +7,7 @@ by Vite in development.
 | --- | --- | --- |
 | `/` | [`App.tsx`](../dashboard/src/App.tsx) | Day-to-day desktop use |
 | `/tablet` | [`TabletDashboard.tsx`](../dashboard/src/components/TabletDashboard.tsx) | A wall display or tablet you glance at |
+| `/insights` | [`InsightsPage.tsx`](../dashboard/src/components/InsightsPage.tsx) | Latency, errors, cost attribution, tools, fleet |
 | `/users` | [`UsersPage.tsx`](../dashboard/src/components/UsersPage.tsx) | Linking dev-container user IDs to projects |
 | `/settings` | [`SettingsPage.tsx`](../dashboard/src/components/SettingsPage.tsx) | Preferences, model prices, backup controls |
 
@@ -20,7 +21,12 @@ place. There is no manual refresh button because there is no need for one.
 Six all-time figures from `/api/summary`: active sessions, total sessions, input
 tokens, output tokens, cache read tokens, total cost.
 
-"Active" here means seen in the last 15 minutes, computed **server-side**. The
+Below the cards, a line appears if any events arrived with no `session.id` —
+they are in these totals but in no per-session view, so the discrepancy is
+stated rather than left to be discovered.
+
+"Active" here means seen within `ACTIVE_WINDOW_MINUTES`, computed
+**server-side**. The
 `activeSessionWindowMin` setting does not change this card — see
 [Configuration](configuration.md#dashboard-preferences).
 
@@ -112,6 +118,28 @@ chrome. Same data, different priorities.
 
 Point a kiosk browser at `http://<host>:9595/tablet`. Settings are per-browser,
 so configure the budget and thresholds *on that device*.
+
+## `/insights` — everything the cost view doesn't show
+
+Panels over telemetry Claude Code has always sent, which this service stored in
+`raw_attributes` from the start but could not query until those attributes
+became columns. Same time-window control as the main chart.
+
+| Panel | Answers |
+| --- | --- |
+| **API latency** | p50 / p95 / max request duration |
+| **Errors and refusals** | Error rate, HTTP status breakdown, refusal categories, and how many requests were retried |
+| **Cost by query source** | How much of the bill is `subagent` and `auxiliary` rather than `main` — usually the surprise |
+| **Cost by effort and speed** | Spend per effort level, and how much went through fast mode |
+| **Cost by agent** | Per-agent spend |
+| **Cost by skill and MCP server** | Per-skill and per-MCP-server spend |
+| **Tool performance** | Calls, failures and duration per tool |
+| **Fleet** | Which Claude Code versions and terminals are reporting, and when each was last seen |
+
+`(none)` in a row means the attribute was absent on those events. Some values
+are redacted by Claude Code itself unless the client sets
+`OTEL_LOG_TOOL_DETAILS=1`: user-defined agents report as `custom`, third-party
+skills and plugins as `third-party`.
 
 ## `/users` — linking containers to projects
 

@@ -72,6 +72,8 @@ def make_payload(
     age_seconds: float = 0.0,
     event_name: str = "claude_code.api_request",
     project: str | None = None,
+    extra_attrs: list | None = None,
+    app_version: str | None = None,
 ) -> dict:
     """Build a minimal OTLP/JSON payload for one log record."""
     attrs = [
@@ -84,10 +86,13 @@ def make_payload(
         attrs.append({"key": "output_tokens", "value": {"intValue": str(output_tokens)}})
     if cost_usd is not None:
         attrs.append({"key": "cost_usd", "value": {"doubleValue": cost_usd}})
+    attrs.extend(extra_attrs or [])
     resource_attrs = [{"key": "user.id", "value": {"stringValue": user_id}}]
     if project is not None:
         # What OTEL_RESOURCE_ATTRIBUTES=project=<name> puts on the wire
         resource_attrs.append({"key": "project", "value": {"stringValue": project}})
+    if app_version is not None:
+        resource_attrs.append({"key": "app.version", "value": {"stringValue": app_version}})
     return {
         "resourceLogs": [
             {
@@ -552,6 +557,93 @@ def test_budget_cycle() -> None:
     print("OK (budget) - cycle spend excludes prior periods; all-time total unchanged")
 
 
+
+def test_promoted_attributes_are_queryable() -> None:
+    """Attributes Claude Code always sent are now columns, not just JSON."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("ins-1", app_version="2.1.263", extra_attrs=[
+            {"key": "duration_ms", "value": {"intValue": "1200"}},
+            {"key": "query_source", "value": {"stringValue": "subagent"}},
+            {"key": "effort", "value": {"stringValue": "xhigh"}},
+            {"key": "speed", "value": {"stringValue": "fast"}},
+            {"key": "agent.name", "value": {"stringValue": "Explore"}},
+            {"key": "skill.name", "value": {"stringValue": "code-review"}},
+            {"key": "mcp_server.name", "value": {"stringValue": "custom"}},
+            {"key": "prompt.id", "value": {"stringValue": "p-123"}},
+            {"key": "terminal.type", "value": {"stringValue": "vscode"}},
+        ]))
+        client.post("/v1/logs", json=make_payload("ins-2", cost_usd=5.0, extra_attrs=[
+            {"key": "duration_ms", "value": {"intValue": "400"}},
+            {"key": "query_source", "value": {"stringValue": "main"}},
+        ]))
+
+        attr = client.get("/api/attribution?hours=0").json()
+        sources = {r["name"]: r for r in attr["by_query_source"]}
+        assert set(sources) == {"main", "subagent"}, sources
+        assert sources["main"]["cost_usd"] == 5.0, sources
+        assert {r["name"] for r in attr["by_agent"]} == {"Explore", "(none)"}, attr["by_agent"]
+        assert {r["name"] for r in attr["by_effort"]} == {"xhigh", "(none)"}, attr["by_effort"]
+
+        lat = client.get("/api/latency?hours=0").json()
+        assert lat["requests"] == 2 and lat["max_ms"] == 1200, lat
+        assert lat["p50_ms"] in (400, 1200) and lat["p95_ms"] == 1200, lat
+
+        fleet = client.get("/api/fleet").json()
+        assert any(f["app_version"] == "2.1.263" for f in fleet), fleet
+
+    print("OK (insights) - promoted attributes drive attribution, latency and fleet views")
+
+
+def test_errors_and_tools_views() -> None:
+    """api_error, api_refusal and tool_result events finally surface."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("e-1"))
+        client.post("/v1/logs", json=make_payload(
+            "e-1", event_name="claude_code.api_error", cost_usd=None,
+            extra_attrs=[{"key": "status_code", "value": {"intValue": "429"}},
+                         {"key": "attempt", "value": {"intValue": "3"}}]))
+        client.post("/v1/logs", json=make_payload(
+            "e-1", event_name="claude_code.api_refusal", cost_usd=None,
+            extra_attrs=[{"key": "category", "value": {"stringValue": "cyber"}}]))
+        client.post("/v1/logs", json=make_payload(
+            "e-1", event_name="claude_code.tool_result", cost_usd=None,
+            extra_attrs=[{"key": "tool_name", "value": {"stringValue": "Bash"}},
+                         {"key": "success", "value": {"stringValue": "false"}},
+                         {"key": "duration_ms", "value": {"intValue": "900"}},
+                         {"key": "error_type", "value": {"stringValue": "ShellError"}}]))
+
+        errs = client.get("/api/errors?hours=0").json()
+        assert errs["errors"] == 1 and errs["refusals"] == 1, errs
+        assert errs["retried"] == 1, errs
+        assert errs["by_status_code"][0]["status_code"] == 429, errs
+        assert errs["by_refusal_category"][0]["category"] == "cyber", errs
+
+        tools = client.get("/api/tools?hours=0").json()
+        assert tools[0]["tool_name"] == "Bash", tools
+        assert tools[0]["failures"] == 1 and tools[0]["max_ms"] == 900, tools
+
+    print("OK (errors/tools) - error rate, retries, refusal categories and tool failures")
+
+
+def test_unattributed_events_are_reported() -> None:
+    """Events with no session.id no longer silently diverge from the views."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("u-1", cost_usd=1.0))
+        client.post("/v1/logs", json=make_payload(None, cost_usd=9.0))
+
+        summary = client.get("/api/summary").json()
+        per_session = sum(s["cost_usd"] for s in client.get("/api/sessions").json())
+        assert summary["total_cost_usd"] == 10.0, summary
+        assert per_session == 1.0, per_session
+        assert summary["unattributed_events"] == 1, summary
+        assert summary["unattributed_cost_usd"] == 9.0, summary
+
+    print("OK (unattributed) - the gap between headline and per-session totals is reported")
+
+
 def main() -> None:
     print(f"Scratch database: {db_module.DB_PATH}\n")
     test_ingest_without_auth()
@@ -568,6 +660,9 @@ def main() -> None:
     test_project_precedence()
     test_settings_round_trip()
     test_budget_cycle()
+    test_promoted_attributes_are_queryable()
+    test_errors_and_tools_views()
+    test_unattributed_events_are_reported()
     test_no_cors_headers()
     test_docs_endpoints_disabled()
     test_refuses_to_start_without_a_token()  # reloads main_module; keep last

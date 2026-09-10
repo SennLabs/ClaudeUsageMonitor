@@ -125,7 +125,9 @@ All-time totals plus a live active count.
   "total_cache_read_tokens": 2288401,
   "total_cache_creation_tokens": 118002,
   "total_cost_usd": 14.83,
-  "active_sessions": 2
+  "active_sessions": 2,
+  "unattributed_events": 0,
+  "unattributed_cost_usd": 0.0
 }
 ```
 
@@ -134,6 +136,9 @@ All-time totals plus a live active count.
   be lower than the row count of the `sessions` table.
 - `active_sessions` counts sessions whose `last_seen_at` is within the last
   `ACTIVE_WINDOW_MINUTES` (default 15) — see [Configuration](configuration.md).
+- `unattributed_*` covers events that arrived with no `session.id`. They are in
+  the totals here but reach no per-session or per-user view, so the two would
+  otherwise disagree with no explanation.
 
 ---
 
@@ -341,6 +346,72 @@ Removes the mapping. Existing session labels are left in place unless you pass
 
 ```json
 {"ok": true}
+```
+
+---
+
+## Insight endpoints
+
+All read attributes Claude Code has always sent and this service has always
+stored — promoting them out of `raw_attributes` is what made them queryable.
+Each takes the same `hours` parameter as the time-series endpoints (`0` = all
+time).
+
+### `GET /api/attribution`
+
+Cost split by the dimensions other than model and project. Each key holds up to
+20 rows of `{name, requests, cost_usd, total_tokens}`, ordered by cost.
+
+```json
+{
+  "by_query_source": [{"name": "subagent", "requests": 412, "cost_usd": 9.40, "total_tokens": 880122}],
+  "by_agent": [...], "by_skill": [...], "by_mcp_server": [...],
+  "by_effort": [...], "by_speed": [...]
+}
+```
+
+`(none)` means the attribute was absent on those events. Note Claude Code's own
+redaction: user-defined agents report as `custom` and third-party skills and
+plugins as `third-party` unless the client sets `OTEL_LOG_TOOL_DETAILS=1`.
+
+### `GET /api/latency`
+
+```json
+{"requests": 412, "avg_ms": 3100, "p50_ms": 2400, "p95_ms": 9800, "max_ms": 41000}
+```
+
+SQLite has no percentile function, so p50 and p95 are read positionally out of
+the ordered set. All fields are `null` when no request in the window carried a
+`duration_ms`.
+
+### `GET /api/errors`
+
+```json
+{
+  "requests": 412, "errors": 7, "refusals": 1, "retried": 4, "error_rate": 0.0167,
+  "by_status_code": [{"status_code": 429, "n": 5}],
+  "by_refusal_category": [{"category": "cyber", "n": 1}]
+}
+```
+
+`retried` counts events whose `attempt` attribute is above 1 — also the signal
+for whether retried batches are being de-duplicated.
+
+### `GET /api/tools`
+
+Up to 30 rows from `claude_code.tool_result`, ordered by call count:
+
+```json
+[{"tool_name": "Bash", "calls": 240, "failures": 11, "avg_ms": 820, "max_ms": 30000}]
+```
+
+### `GET /api/fleet`
+
+Which Claude Code versions and terminals are reporting. All time, no `hours`
+parameter.
+
+```json
+[{"app_version": "2.1.263", "terminal_type": "vscode", "sessions": 14, "last_seen_at": "..."}]
 ```
 
 ---

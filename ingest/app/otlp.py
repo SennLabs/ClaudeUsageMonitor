@@ -36,6 +36,19 @@ _ATTR_ALIASES = {
     "project": "project_name",
     "project.name": "project_name",
     "project_name": "project_name",
+    # ── Already arriving, previously only ever stored in raw_attributes ──
+    "duration_ms": "duration_ms",
+    "query_source": "query_source",   # main | subagent | auxiliary
+    "effort": "effort",               # low | medium | high | xhigh | max
+    "speed": "speed",                 # fast | normal
+    "agent.name": "agent_name",
+    "skill.name": "skill_name",
+    "mcp_server.name": "mcp_server_name",
+    "prompt.id": "prompt_id",
+    "app.version": "app_version",
+    "terminal.type": "terminal_type",
+    "tool_name": "tool_name",
+    "status_code": "status_code",
 }
 
 _INT_FIELDS = {
@@ -44,9 +57,27 @@ _INT_FIELDS = {
     "cache_read_tokens",
     "cache_creation_tokens",
     "cost_usd_micros",
+    "duration_ms",
+    "status_code",
 }
 
-_STR_FIELDS = {"session_id", "user_id", "organization_id", "model", "project_name"}
+_STR_FIELDS = {
+    "session_id",
+    "user_id",
+    "organization_id",
+    "model",
+    "project_name",
+    "query_source",
+    "effort",
+    "speed",
+    "agent_name",
+    "skill_name",
+    "mcp_server_name",
+    "prompt_id",
+    "app_version",
+    "terminal_type",
+    "tool_name",
+}
 
 # Anything SQLite can bind directly. A nested kvlistValue/arrayValue decodes to
 # a dict or list, which must not reach the insert — it raises at bind time and
@@ -72,6 +103,18 @@ class LogEvent:
     cost_usd_micros: int | None = None
     # From the container's own resource attributes, not from any mapping table.
     project_name: str | None = None
+    duration_ms: int | None = None
+    query_source: str | None = None
+    effort: str | None = None
+    speed: str | None = None
+    agent_name: str | None = None
+    skill_name: str | None = None
+    mcp_server_name: str | None = None
+    prompt_id: str | None = None
+    app_version: str | None = None
+    terminal_type: str | None = None
+    tool_name: str | None = None
+    status_code: int | None = None
     raw_attributes: dict[str, Any] = field(default_factory=dict)
 
 

@@ -6,6 +6,7 @@ import {
   fetchUsageOverTime,
   fetchUsageOverTimeByProject,
 } from './api'
+import { formatCost, formatNumber } from './format'
 import ModelBreakdown from './components/ModelBreakdown'
 import SessionsTable from './components/SessionsTable'
 import SummaryCards from './components/SummaryCards'
@@ -101,6 +102,12 @@ export default function App() {
           <h1 class="text-lg font-semibold text-slate-900 dark:text-slate-50">Claude Usage Monitor</h1>
           <div class="flex items-center gap-3">
             <a
+              href="/insights"
+              class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Insights
+            </a>
+            <a
               href="/users"
               class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             >
@@ -135,6 +142,13 @@ export default function App() {
       <main class="mx-auto max-w-6xl space-y-8 px-6 py-8">
         <section>
           <SummaryCards summary={latest(summary)} />
+          <Show when={(latest(summary)?.unattributed_events ?? 0) > 0}>
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+              {formatNumber(latest(summary)!.unattributed_events)} event(s) worth{' '}
+              {formatCost(latest(summary)!.unattributed_cost_usd)} arrived without a session ID.
+              They are counted in the totals above but appear in no per-session or per-user view.
+            </p>
+          </Show>
         </section>
 
         <section>

@@ -38,7 +38,7 @@ single-instance internal tool on a private network.
 - [x] [10. `log.info` is never emitted](#10-loginfo-is-never-emitted) — *fixed*
 - [x] [11. `ACTIVE_WINDOW_MINUTES` is not passed through Compose](#11-active_window_minutes-is-not-passed-through-compose) — *fixed*
 - [x] [12. Three different "active session" windows](#12-three-different-active-session-windows) — *fixed*
-- [ ] [13. Events with no `session.id` inflate the headline only](#13-events-with-no-sessionid-inflate-the-headline-only) — *verified*
+- [x] [13. Events with no `session.id` inflate the headline only](#13-events-with-no-sessionid-inflate-the-headline-only) — *fixed*
 - [ ] [14. `computeHourlyRate` is a sawtooth, not a rate](#14-computehourlyrate-is-a-sawtooth-not-a-rate) — *reported*
 - [ ] [15. Polling destroys an in-progress inline edit](#15-polling-destroys-an-in-progress-inline-edit) — *reported*
 - [ ] [16. Chart rendering edge cases](#16-chart-rendering-edge-cases) — *reported*
@@ -364,7 +364,9 @@ document that the server value must match.
 
 ### 13. Events with no `session.id` inflate the headline only
 
-*Status: **verified**.*
+*Status: **fixed**.*
+
+**Fixed 2026-09-10.** `/api/summary` now returns `unattributed_events` and `unattributed_cost_usd`, and the dashboard states the gap under the summary cards. Reporting the divergence rather than hiding it: attributing these to a synthetic session would invent a session that never existed. Regression test `test_unattributed_events_are_reported`.
 
 `fetch_summary` sums all of `usage_events`; `fetch_sessions` and `fetch_users`
 reach events only through `sessions`. An event with no session id is stored with
