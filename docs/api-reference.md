@@ -101,6 +101,76 @@ Notes:
 
 ---
 
+## `POST /v1/metrics`
+
+Accepts an OTLP/HTTP JSON `ExportMetricsServiceRequest` — Claude Code's
+pre-aggregated metrics stream, sent when the client sets
+`OTEL_METRICS_EXPORTER=otlp`. The path is fixed by the OTLP spec.
+
+**This endpoint exists partly so it cannot 404.** Clients set the *generic*
+`OTEL_EXPORTER_OTLP_ENDPOINT`, which applies to every signal — so before this
+existed, enabling metrics on any container made Claude Code post here on every
+export interval and get a 404 back, silently, forever.
+
+**Request** — standard OTLP JSON encoding:
+
+```json
+{
+  "resourceMetrics": [{
+    "resource": {"attributes": [
+      {"key": "user.id", "value": {"stringValue": "user-123"}},
+      {"key": "project", "value": {"stringValue": "radiology-pacs"}}
+    ]},
+    "scopeMetrics": [{
+      "metrics": [{
+        "name": "claude_code.lines_of_code.count",
+        "sum": {
+          "aggregationTemporality": 1,
+          "isMonotonic": true,
+          "dataPoints": [{
+            "startTimeUnixNano": "1757462340000000000",
+            "timeUnixNano":      "1757462400000000000",
+            "asInt": "412",
+            "attributes": [
+              {"key": "session.id", "value": {"stringValue": "session-abc"}},
+              {"key": "type",       "value": {"stringValue": "added"}}
+            ]
+          }]
+        }
+      }]
+    }]
+  }]
+}
+```
+
+**Response** — `200` with `{}`, the OTLP empty-success body.
+
+Notes:
+
+- `sum`, `gauge` and `histogram` points are all accepted. A histogram has no
+  single value, so its `sum` field is what gets stored and `count` rides along
+  in `raw_attributes`.
+- **`aggregationTemporality` matters.** `1` is delta (each point is an
+  increment) and `2` is cumulative (each point is a running total). Claude Code
+  exports delta, which is what the read queries sum. Cumulative points are
+  stored but **excluded from every total** — adding running totals counts the
+  same work once per export interval — and `/api/metrics` reports how many were
+  skipped so a misconfigured client is visible rather than quietly halving
+  every figure.
+- An **unrecognised metric name is still stored** and appears in the
+  `by_metric` catch-all. Metric naming has shifted across Claude Code versions
+  before; a rename should degrade to "unrecognised", not vanish.
+- A metric point carrying a `session.id` **creates or refreshes that session**,
+  including its project attribution from resource attributes. A container
+  exporting metrics is a live session whether or not it has billed an API call
+  yet, and the empty-session purge leaves such sessions alone.
+- Everything else matches `POST /v1/logs`: one transaction per batch, a
+  malformed envelope is `400`, individual unusable points are dropped and
+  counted, the write runs off the event loop, and retried batches are
+  de-duplicated on a `point_hash` behind a unique index.
+
+---
+
 ## `GET /healthz`
 
 Unauthenticated. Used by the container `HEALTHCHECK`.
@@ -219,6 +289,13 @@ attribute collapse into the literal string `"unknown"`.
 
 - Bucket size is **hourly** when `0 < hours <= 48`, and **daily** for longer
   windows and for all-time.
+- **Buckets are named in the configured `displayTimeZone`**, so a daily bucket
+  is a local day. Under the `UTC` default they end in `Z` as shown above; with
+  `Australia/Perth` the same bucket reads `2026-09-10T09:00:00+08:00`. The
+  offset is always present, so the string alone says which instant the bucket
+  starts at — parse the label off the characters rather than through a `Date`,
+  or the reader's own zone gets applied a second time. Storage stays UTC; only
+  the labelling moves.
 - Empty buckets are absent — the series is sparse, not zero-filled. Charts must
   handle gaps.
 - `total_tokens` is `input + output`; cache tokens are not included.
@@ -446,13 +523,18 @@ than only logged.
 {
   "last_run_at": "2026-09-10T07:41:02+00:00",
   "last_ok": true, "last_error": null,
-  "sessions_purged": 3, "attributes_cleared": 0, "events_deleted": 0,
+  "sessions_purged": 3,
+  "attributes_cleared": 0, "events_deleted": 0,
+  "metric_attributes_cleared": 0, "metric_points_deleted": 0,
   "interval_seconds": 60, "active_window_minutes": 15,
   "retention_days": null, "raw_attributes_retention_days": null
 }
 ```
 
-Counters are cumulative for this process and reset on restart.
+Counters are cumulative for this process and reset on restart. Events and
+metric points are counted apart deliberately: a 60-second metrics stream
+produces far more rows than the event stream, so one combined figure would
+report deleting several times more "events" than have ever existed.
 
 ### `GET /api/cache-efficiency`
 
@@ -487,6 +569,86 @@ Cost per user prompt — every event of one prompt shares a `prompt.id`.
 
 Ordered by cost. Events without a `prompt.id` are excluded rather than lumped
 together.
+
+### `GET /api/metrics`
+
+Claude Code's own metrics, and the productivity ratios derived from them.
+Everything here needs `OTEL_METRICS_EXPORTER=otlp` on the reporting clients;
+without it `reporting` is `false` and every figure is zero.
+
+| Query param | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `hours` | int | `168` | Look-back window; `0` for all time. Defaults to a week because commits and PRs are sparse enough that 24h is usually all zeroes. |
+
+```json
+{
+  "window_hours": 168,
+  "reporting": true,
+  "cumulative_points_ignored": 0,
+  "unsummable_points": 0,
+  "totals": {
+    "lines_added": 4120, "lines_removed": 980,
+    "commits": 37, "pull_requests": 6,
+    "active_seconds": 61200, "sessions_started": 44
+  },
+  "cost_usd": 128.40,
+  "cost_usd_fleet": 214.00,
+  "metrics_cost_coverage": 0.6,
+  "cost_usd_from_metrics": 128.39,
+  "derived": {
+    "cost_per_commit": 3.47,
+    "cost_per_pull_request": 21.40,
+    "cost_per_active_hour": 7.55,
+    "usd_per_1k_lines": 25.18,
+    "lines_per_active_hour": 300.0
+  },
+  "sessions_by_start_type": [{"name": "fresh", "total": 30}],
+  "active_time_by_type":    [{"name": "user",  "total": 61200}],
+  "tokens_by_type":         [{"name": "input", "total": 1904322}],
+  "edit_decisions": [
+    {"language": "python", "accepted": 88, "rejected": 12, "acceptance_rate": 0.88}
+  ],
+  "by_metric": [{"metric_name": "claude_code.commit.count", "points": 37, "total": 37}]
+}
+```
+
+- Every value under `derived` is **`null`, not `0`, when its denominator is
+  zero**. "No commits recorded" and "$0.00 per commit" are opposite statements
+  and the second one looks like a win.
+- **`cost_usd` is scoped to sessions that also report metrics**, and
+  `cost_usd_fleet` is everything (the figure `/api/summary` agrees with).
+  This matters: the counters behind every ratio exist only for clients with
+  `OTEL_METRICS_EXPORTER` set, which is optional. Dividing fleet-wide cost by a
+  partial fleet's commits is not slightly off, it is wrong by the inverse of
+  the rollout — with 2 of 10 developers exporting metrics, cost-per-commit
+  would read 5× high. `metrics_cost_coverage` is `cost_usd / cost_usd_fleet`;
+  below 1, everything under `derived` describes that subset and the dashboard
+  says so above the figures.
+- `cost_usd_from_metrics` is the metrics stream's own cost counter, compared
+  against the **scoped** `cost_usd` so both sides cover the same sessions. Both
+  are produced by the same client from the same API responses, so a gap is a
+  delivery problem — a dropped or duplicated export — rather than an artefact of
+  a partial rollout or a disagreement about prices. The dashboard flags a gap
+  above 2%.
+- `active_seconds` is Claude Code's measured active time, which is a much
+  better denominator than wall-clock session duration.
+- **`reporting` is not filtered to delta.** It answers "is anything arriving at
+  all". A client stuck on cumulative temporality *is* arriving but contributes
+  to no total, so it returns `reporting: true` with every figure at zero and a
+  non-zero `cumulative_points_ignored` — which is the actual diagnosis. Reading
+  it off the delta points alone sent the UI to "no metrics received", pointing
+  at the wrong fix.
+- `cumulative_points_ignored` counts only genuinely **cumulative** points — the
+  ones a client setting fixes. Points with no temporality at all (a gauge is
+  the normal case; OTLP gauges carry no `aggregationTemporality`) are counted
+  separately as `unsummable_points`, because no client setting will change
+  them. They are still stored and still listed in `by_metric`.
+- **`by_metric` is not delta-filtered either** — it is the catch-all that keeps
+  an unrecognised or non-summable metric visible. Its `points` counts every
+  point; its `total` is the delta-only sum, so a gauge appears with
+  `points > 0` and `total: 0`.
+
+---
 
 ### `GET /api/audit`
 
@@ -550,6 +712,7 @@ Dashboard preferences, stored server-side so every viewer shares them.
   "defaultTimeWindow": "24h",
   "defaultMetric": "tokens",
   "costAlertThresholdPerHour": null,
+  "displayTimeZone": "Australia/Perth",
   "activeSessionWindowMin": 15
 }
 ```
@@ -575,7 +738,7 @@ curl -X PUT http://localhost:9585/api/settings \
   dashboard talking to an older server degrades rather than failing.
 - Invalid values return `400` with a message: `billingCycleDay` outside 1–28,
   `refreshIntervalMs` below 1000, a negative budget, an unrecognised window or
-  metric.
+  metric, or a `displayTimeZone` that is not a known IANA zone name.
 
 ---
 
@@ -591,8 +754,12 @@ Spend since the start of the current billing period.
 {"cycle_start": "2026-08-15T00:00:00+00:00", "cost_usd": 42.18, "total_tokens": 1904322}
 ```
 
-The period start is computed in UTC and walks back a month when today is before
-the cycle day.
+The period starts at **midnight in `displayTimeZone`** on the cycle day, and
+walks back a month when today is before it. The returned `cycle_start` is that
+instant expressed in UTC — so with `Australia/Perth` and a cycle day of 15 it
+reads `2026-08-14T16:00:00+00:00`, which is local midnight on the 15th.
+Computing it in UTC meant the first eight hours of every period were counted
+against the previous one.
 
 ---
 

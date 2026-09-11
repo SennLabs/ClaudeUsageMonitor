@@ -33,6 +33,40 @@ the three placeholders:
 | `OTEL_LOGS_EXPORT_INTERVAL` | Batch flush interval in ms. 5000 keeps the dashboard feeling live; raise it to reduce request volume. |
 | `OTEL_RESOURCE_ATTRIBUTES` | Declares which project this container belongs to. Rides on every event, so usage arrives already labelled. |
 
+## Optional: the metrics stream
+
+Everything above uses OTLP **logs**, which carry per-request cost and tokens.
+Claude Code separately emits eight pre-aggregated **metrics** — commits, pull
+requests, active time, lines of code, edit decisions and session starts. Those
+are what the Productivity panel on `/insights` is computed from: cost per
+commit, cost per active hour, dollars per thousand lines, edit acceptance rate
+by language. Add three lines to turn them on:
+
+```json
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_METRIC_EXPORT_INTERVAL": "60000",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta"
+```
+
+| Variable | Why it's here |
+| --- | --- |
+| `OTEL_METRICS_EXPORTER` | `otlp`. The endpoint, protocol and auth header are already set above and apply to every signal, so nothing else needs repeating. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Flush interval in ms. 60000 is the default and is the right order of magnitude — these are counters, not a live feed. |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `delta`, so each point is an increment. It is already Claude Code's default; setting it explicitly means an upstream change of default cannot silently distort the totals. |
+
+Notes:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` is the **generic** endpoint: it applies to
+  every signal, and the exporter appends `/v1/metrics` itself. If you ever need
+  to send metrics somewhere else — Prometheus, say — split them with
+  `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`
+  rather than changing the generic one.
+- This is entirely optional. Leave it out and every other view works exactly
+  as before; the Productivity panel says so rather than showing zeroes.
+- A **cumulative** temporality preference is stored but excluded from every
+  total, and reported on the panel — summing running totals counts the same
+  work once per export interval.
+
 ## Where to put the file
 
 | Location | Scope | Use when |
@@ -156,11 +190,19 @@ If it doesn't, work through [Troubleshooting → No data appears](troubleshootin
 
 Token counts, cost, model name, session/user/organization ids, and timestamps —
 the attributes listed in the [Data model](data-model.md#otlp-attribute-mapping).
+With the metrics stream enabled, also the eight counters listed under
+[`metric_points`](data-model.md#metric_points).
 
-Note that this service stores the **complete** attribute map of every log record
-it receives in `usage_events.raw_attributes`, not just the columns it
-understands. So whatever Claude Code's exporter attaches to an event ends up in
-the database. Claude Code does not include prompt or response text by default,
-but it has opt-in settings that add prompt content to telemetry — if you enable
-anything like that on the sending side, that content lands here too. Treat the
-database as containing exactly what the clients chose to send.
+Note that this service stores the **complete** attribute map of every record it
+receives, not just the columns it understands. So whatever Claude Code's
+exporter attaches ends up in the database.
+
+**Claude Code sends no prompt or response content by default**, but it has five
+opt-in flags that change that — up to `OTEL_LOG_RAW_API_BODIES`, which exports
+full API request and response JSON. Anything you enable lands in
+`raw_attributes`, in `usage.db`, and in every backup snapshot, none of which is
+encrypted at rest. The flags, what each one adds, and how to check what a
+client is actually sending are listed in
+[Security → What is stored](security.md#what-is-stored). Decide deliberately
+before enabling one; treat the database as containing exactly what the clients
+chose to send.

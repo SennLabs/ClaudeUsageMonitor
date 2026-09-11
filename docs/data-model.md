@@ -90,11 +90,66 @@ One row per received log record. Append-only — nothing updates or deletes here
 | `tool_name` | TEXT | On `claude_code.tool_result` events |
 | `status_code` | INTEGER | On `claude_code.api_error` events |
 
+### `metric_points`
+
+One row per data point received on `POST /v1/metrics`. Kept separate from
+`usage_events` rather than folded into it: these are periodic aggregates over a
+time window, not records of a single API call, and they arrive on a different
+interval (60s against 5s). Append-only.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | INTEGER PK AUTOINCREMENT | |
+| `metric_name` | TEXT NOT NULL | e.g. `claude_code.commit.count` |
+| `occurred_at` | TEXT NOT NULL | End of the point's window, from `timeUnixNano` |
+| `started_at` | TEXT | Start of the point's window, from `startTimeUnixNano` |
+| `value` | REAL NOT NULL | `asInt` / `asDouble`, or a histogram's `sum` |
+| `temporality` | TEXT | `delta` / `cumulative` / `unspecified` — see below |
+| `is_monotonic` | INTEGER | From the sum's `isMonotonic` |
+| `session_id` | TEXT | Not a foreign key: a metrics-only session is still upserted into `sessions`, but points are kept even if the session row is not |
+| `user_id`, `organization_id`, `project_name` | TEXT | From resource attributes |
+| `app_version`, `terminal_type`, `model` | TEXT | |
+| `type` | TEXT | `added`/`removed` (lines), `user`/`cli` (active time), `input`/`output`/… (tokens) |
+| `tool_name`, `decision`, `source`, `language` | TEXT | On `code_edit_tool.decision` |
+| `start_type` | TEXT | `fresh` / `resume` / `continue`, on `session.count` |
+| `raw_attributes` | TEXT | JSON of the complete merged attribute map, key-sorted |
+| `point_hash` | TEXT | SHA-256 identity digest, unique — same mechanism as `event_hash` |
+
+**Temporality is the thing to get right.** A delta point is an increment and
+sums correctly; a cumulative point is a running total, and summing the series
+counts the same work once per export interval. Claude Code exports delta, and
+every read query filters to `temporality = 'delta'`. Cumulative points are
+still stored and `/api/metrics` returns `cumulative_points_ignored` so a
+misconfigured client shows up rather than quietly halving every figure. Pin it
+on the client with
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`.
+
+**Metric names are not a closed set.** Anything that arrives is stored and
+appears in `/api/metrics`'s `by_metric` list. Naming has shifted across Claude
+Code versions before — which is why `_ATTR_ALIASES` carries aliases at all — so
+a rename should degrade to "unrecognised", not vanish. The names currently
+recognised by name:
+
+| Metric | Key attributes | Feeds |
+| --- | --- | --- |
+| `claude_code.lines_of_code.count` | `type` added/removed | `$ / 1k lines` |
+| `claude_code.commit.count` | — | `cost / commit` |
+| `claude_code.pull_request.count` | — | `cost / PR` |
+| `claude_code.active_time.total` | `type` user/cli | `cost / active hour` |
+| `claude_code.code_edit_tool.decision` | `decision`, `language`, `tool_name`, `source` | Acceptance rate by language |
+| `claude_code.session.count` | `start_type` | Session funnel |
+| `claude_code.cost.usage` | — | Cross-check against the event stream |
+| `claude_code.token.usage` | `type` | Cross-check against the event stream |
+
 ### Event de-duplication
 
 An OpenTelemetry exporter retries a 5xx by resending the identical batch. With
 nothing to recognise the resend, a single transient failure permanently
 inflated cost and token totals.
+
+The same applies to `metric_points`, where a re-counted delta is a
+permanently wrong total; `point_hash` covers the metric name, its window, its
+value and its attribute map, and is created and repaired by the same code path.
 
 Every record now carries an `event_hash`: a SHA-256 over its session id,
 timestamp, event name and complete key-sorted attribute map. A `UNIQUE` index
@@ -127,10 +182,15 @@ CREATE INDEX        idx_usage_events_time    ON usage_events(occurred_at);
 CREATE INDEX        idx_sessions_user        ON sessions(user_id);
 CREATE UNIQUE INDEX idx_usage_events_hash    ON usage_events(event_hash);  -- from init_db()
 CREATE INDEX        idx_usage_events_name    ON usage_events(event_name);
+CREATE INDEX        idx_metric_points_name_time ON metric_points(metric_name, occurred_at);
+CREATE INDEX        idx_metric_points_session   ON metric_points(session_id);
+CREATE UNIQUE INDEX idx_metric_points_hash      ON metric_points(point_hash);  -- from init_db()
 ```
 
 The time index is what keeps the windowed chart queries cheap as the table
-grows; the user index serves the Users page and mapping updates.
+grows; the user index serves the Users page and mapping updates. Every
+`/api/metrics` query filters on metric name and window together, which is why
+that index is composite.
 
 ### Migrations
 
@@ -244,17 +304,40 @@ All read endpoints aggregate in SQL. The functions in `db.py`:
 
 ### Time bucketing
 
-```python
-def _time_bucket_fmt(hours: int | None) -> str:
-    return '%Y-%m-%dT%H:00:00Z' if hours is not None and hours <= 48 else '%Y-%m-%dT00:00:00Z'
-```
-
 Windows up to 48 hours bucket hourly; longer windows — and all-time, where
-`hours` is `None` — bucket daily. This keeps a 30-day chart at ~30 points
-instead of ~720. The dashboard mirrors this rule when choosing axis label
-format, so the two must stay in step. The format string is interpolated
-into the SQL, but only ever from this function's two literals — never from user
-input.
+`hours` is `None` — bucket daily (`_granularity()`). This keeps a 30-day chart
+at ~30 points instead of ~720. The dashboard mirrors the rule when choosing
+axis label format, so the two must stay in step.
+
+Buckets are named in the **display time zone** (`displayTimeZone`, an IANA
+name, default `UTC`). Timestamps are stored in UTC and stay that way — only the
+day boundaries move. That matters wherever the offset is not zero: in UTC+8 a
+UTC-day bucket runs 08:00 to 08:00 local, so "yesterday's spend" on the chart
+was never anybody's yesterday.
+
+`_bucket_sql()` picks one of two implementations:
+
+| Zone | Expression | Bucket string |
+| --- | --- | --- |
+| `UTC` (default) | `strftime('%Y-%m-%dT00:00:00Z', occurred_at)` | `2026-09-10T00:00:00Z` |
+| anything else | `local_bucket(occurred_at)`, a Python function registered on the connection | `2026-09-10T00:00:00+08:00` |
+
+UTC keeps the pure-SQL path: it is the default, it is exact, and leaving it
+alone means configuring nothing changes nothing. Any other zone needs a
+per-row conversion rather than a fixed offset added to the SQL, because a fixed
+offset is wrong on either side of a DST transition. `conn.create_function(...,
+deterministic=True)` lets SQLite reuse results for repeated inputs.
+
+The format string is interpolated into the SQL, but only ever from these
+literals — never from user input. `displayTimeZone` is validated against
+`zoneinfo` on save and re-checked on read; an unresolvable zone falls back to
+UTC rather than raising, because a chart in the wrong zone beats a chart that
+500s.
+
+Bucket strings therefore carry a real offset instead of always ending in `Z`.
+Consumers must read the label off the string; passing it through a `Date` and
+re-formatting applies the *reader's* zone on top and shifts the label off its
+own bucket.
 
 Buckets with no events produce no row. Consumers must treat the series as sparse.
 
@@ -272,7 +355,11 @@ both hold:
 - `last_seen_at` is older than the active window (`ACTIVE_WINDOW_MINUTES`,
   default 15), and
 - the sum of its input, output, cache-read and cache-creation tokens is 0
-  **and** its total cost is 0.
+  **and** its total cost is 0, and
+- it has no rows in `metric_points`. Active time, commits and lines of code
+  arrive on the metrics stream alone, with no billable API call behind them —
+  purging such a session would delete the only record of work the productivity
+  figures are computed from.
 
 Any session that recorded real usage is never touched, however old. A session
 that is still live is never touched, however empty.
@@ -342,8 +429,14 @@ purges empty sessions:
 
 | Variable | What it does | Changes your numbers? |
 | --- | --- | --- |
-| `RAW_ATTRIBUTES_RETENTION_DAYS` | Nulls `raw_attributes` on older events | **No** — every aggregate is computed from the typed columns |
-| `RETENTION_DAYS` | Deletes older events, and sessions left empty by it | **Yes** — all-time totals shrink |
+| `RAW_ATTRIBUTES_RETENTION_DAYS` | Nulls `raw_attributes` on older events **and metric points** | **No** — every aggregate is computed from the typed columns |
+| `RETENTION_DAYS` | Deletes older events **and metric points**, and sessions left empty by it | **Yes** — all-time totals shrink |
+
+`GET /api/maintenance` reports the two tables separately
+(`events_deleted` / `metric_points_deleted`): a 60-second metrics stream
+produces far more rows than the event stream, so a combined figure would be
+dominated by metric points and read as though the event table had been
+emptied.
 
 Reach for the first one. It reclaims most of the space and costs you only the
 ability to recover an attribute that was never promoted to a column.

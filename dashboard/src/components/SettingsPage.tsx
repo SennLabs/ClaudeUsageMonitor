@@ -1,4 +1,4 @@
-import { createEffect, createResource, createSignal, Show } from 'solid-js'
+import { createEffect, createResource, createSignal, For, Show } from 'solid-js'
 import { fetchBackupStatus, saveSettings, triggerBackup } from '../api'
 import type { AppSettings, BackupStatus, Metric, TimeWindow } from '../api'
 import { errorMessage } from '../resource'
@@ -15,6 +15,21 @@ function Section(props: { title: string; description?: string; children: any }) 
     </div>
   )
 }
+
+/**
+ * `Intl.supportedValuesOf` is the browser's own IANA list, which is the same
+ * database the server validates against. The fallback covers older engines and
+ * keeps the field usable rather than empty.
+ */
+const TIME_ZONES: string[] = (() => {
+  try {
+    const supported = (Intl as any).supportedValuesOf?.('timeZone') as string[] | undefined
+    if (supported?.length) return ['UTC', ...supported.filter((z) => z !== 'UTC')]
+  } catch {
+    // Intl.supportedValuesOf is absent or threw; fall through to the short list.
+  }
+  return ['UTC', 'Australia/Perth', 'Australia/Sydney', 'Europe/London', 'America/New_York']
+})()
 
 function Field(props: { label: string; hint?: string; children: any }) {
   return (
@@ -89,6 +104,7 @@ export default function SettingsPage() {
   const [defaultTimeWindow, setDefaultTimeWindow] = createSignal<TimeWindow>('24h')
   const [defaultMetric, setDefaultMetric] = createSignal<Metric>('cost')
   const [alertThreshold, setAlertThreshold] = createSignal('')
+  const [displayTimeZone, setDisplayTimeZone] = createSignal('UTC')
   const [seeded, setSeeded] = createSignal(false)
   const [saveError, setSaveError] = createSignal<string | null>(null)
 
@@ -103,6 +119,7 @@ export default function SettingsPage() {
     setAlertThreshold(
       s.costAlertThresholdPerHour !== null ? String(s.costAlertThresholdPerHour) : '',
     )
+    setDisplayTimeZone(s.displayTimeZone)
     setSeeded(true)
   })
 
@@ -116,6 +133,7 @@ export default function SettingsPage() {
       defaultTimeWindow: defaultTimeWindow(),
       defaultMetric: defaultMetric(),
       costAlertThresholdPerHour: !isNaN(alert) && alert > 0 ? alert : null,
+      displayTimeZone: displayTimeZone(),
     }
     setSaveError(null)
     try {
@@ -188,6 +206,24 @@ export default function SettingsPage() {
           title="Chart Defaults"
           description="Starting state for the chart each time the dashboard loads."
         >
+          <Field
+            label="Display time zone"
+            hint="Chart days and the billing period start at midnight in this zone. Everything is still stored in UTC — only the day boundaries move. An unknown name is rejected on save."
+          >
+            <select
+              value={displayTimeZone()}
+              onChange={(e) => setDisplayTimeZone(e.currentTarget.value)}
+              class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            >
+              <For each={TIME_ZONES}>{(tz) => <option value={tz}>{tz}</option>}</For>
+              {/* A zone set out-of-band (or by a future browser) must still
+                  round-trip, rather than silently reverting to UTC on save. */}
+              <Show when={!TIME_ZONES.includes(displayTimeZone())}>
+                <option value={displayTimeZone()}>{displayTimeZone()}</option>
+              </Show>
+            </select>
+          </Field>
+
           <Field label="Default time window">
             <OptionGroup
               value={defaultTimeWindow()}

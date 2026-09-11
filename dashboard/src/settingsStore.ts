@@ -30,6 +30,7 @@ export const FALLBACK_SETTINGS: AppSettings = {
   defaultTimeWindow: '24h',
   defaultMetric: 'cost',
   costAlertThresholdPerHour: null,
+  displayTimeZone: 'UTC',
   activeSessionWindowMin: 15,
 }
 

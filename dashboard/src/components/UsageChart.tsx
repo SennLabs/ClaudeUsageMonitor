@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show } from 'solid-js'
 import type { ProjectTimePoint, UsageTimePoint } from '../api'
+import { fmtY, granularityFor, niceMax, tooltipLabel, xLabel } from '../chart'
 
 export type Metric = 'cost' | 'tokens'
 
@@ -23,63 +24,6 @@ const W = 800
 const H = 220
 const PW = W - ML - MR
 const PH = H - MT - MB
-
-// Bucket granularity mirrors the server's _time_bucket_fmt: hourly up to 48h,
-// daily beyond that and for all-time (hours = 0). Labelling has to follow it —
-// formatting a daily bucket as a clock time renders every point identically.
-type Granularity = 'hour' | 'day'
-
-function granularityFor(hours: number | undefined): Granularity {
-  if (hours === undefined) return 'hour'
-  return hours > 0 && hours <= 48 ? 'hour' : 'day'
-}
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-function fmtHour(iso: string) {
-  const d = new Date(iso)
-  return `${d.getHours().toString().padStart(2, '0')}:00`
-}
-// Daily buckets are UTC day starts, so they're named in UTC. Rendering them in
-// local time would shift the date by a day for anyone west of Greenwich.
-function fmtDay(iso: string, withYear = false) {
-  const d = new Date(iso)
-  const base = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`
-  return withYear ? `${base} ${String(d.getUTCFullYear()).slice(2)}` : base
-}
-function fmtDateTime(iso: string) {
-  const d = new Date(iso)
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getHours().toString().padStart(2, '0')}:00`
-}
-function xLabel(iso: string, g: Granularity, multiYear: boolean) {
-  return g === 'hour' ? fmtHour(iso) : fmtDay(iso, multiYear)
-}
-function tooltipLabel(iso: string, g: Granularity) {
-  if (g === 'hour') return fmtDateTime(iso)
-  const d = new Date(iso)
-  return `${fmtDay(iso)} ${d.getUTCFullYear()}`
-}
-function fmtY(v: number, metric: Metric, max: number) {
-  if (metric === 'cost') {
-    // Scale precision to the axis. niceMax can return sub-cent maxima, where
-    // toFixed(2) rendered every tick as an identical "$0.00".
-    const dp = max >= 1 ? 2 : max >= 0.1 ? 3 : 4
-    return `$${v.toFixed(dp)}`
-  }
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1).replace(/\.0$/, '')}k`
-  // Token counts are integers; fractional ticks are meaningless.
-  return String(Math.round(v))
-}
-function niceMax(raw: number) {
-  if (raw === 0) return 1
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)))
-  const rounded = Math.ceil(raw / mag) * mag
-  // There are five ticks at quarter steps. Below 8 that leaves fractions, and
-  // rounding them for a token axis produced duplicates (0 1 2 2 3); a multiple
-  // of 4 divides cleanly.
-  return rounded < 8 ? Math.max(4, Math.ceil(rounded / 4) * 4) : rounded
-}
 
 interface Series {
   name: string

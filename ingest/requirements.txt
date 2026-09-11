@@ -3,3 +3,8 @@
 # test suite.
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
+# The IANA time-zone database, for the displayTimeZone setting. zoneinfo falls
+# back to this package when the system tzdata is absent, which it is in some
+# slim base images — without it, setting any zone but UTC would fail to resolve
+# and every chart would silently stay on UTC days.
+tzdata==2025.2

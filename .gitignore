@@ -5,6 +5,8 @@
 .venv/
 __pycache__/
 *.pyc
+# pytest writes its own .gitignore inside this, but be explicit
+.pytest_cache/
 
 # SQLite data
 *.db

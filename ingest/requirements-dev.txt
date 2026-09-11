@@ -1,2 +1,4 @@
 -r requirements.txt
 httpx>=0.27
+# The test suite. Run it with `.venv/bin/python -m pytest` from ingest/.
+pytest==9.1.1

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from . import backup, db
 from .otlp import extract_log_events
+from .otlp_metrics import extract_metric_points
 
 # uvicorn configures handlers for its own loggers but leaves the root logger
 # alone, so without this every log.info() in this package is dropped — the
@@ -58,8 +59,13 @@ _maintenance: dict = {
     "last_ok": None,
     "last_error": None,
     "sessions_purged": 0,
+    # Events and metric points are counted apart. A 60-second metrics stream
+    # produces far more rows than the event stream, so one combined figure
+    # would report deleting many times more "events" than have ever existed.
     "attributes_cleared": 0,
     "events_deleted": 0,
+    "metric_attributes_cleared": 0,
+    "metric_points_deleted": 0,
 }
 
 
@@ -70,18 +76,28 @@ async def _maintenance_loop() -> None:
             if removed:
                 log.info("Purged %d empty inactive session(s)", removed)
             retention = await asyncio.to_thread(db.apply_retention)
-            if retention["attributes_cleared"] or retention["events_deleted"]:
+            if any(retention.values()):
                 log.info(
-                    "Retention: cleared attributes on %d event(s), deleted %d event(s)",
+                    "Retention: cleared attributes on %d event(s) and %d metric point(s); "
+                    "deleted %d event(s) and %d metric point(s)",
                     retention["attributes_cleared"],
+                    retention["metric_attributes_cleared"],
                     retention["events_deleted"],
+                    retention["metric_points_deleted"],
                 )
             _maintenance.update(
                 last_ok=True,
                 last_error=None,
                 sessions_purged=_maintenance["sessions_purged"] + removed,
-                attributes_cleared=_maintenance["attributes_cleared"] + retention["attributes_cleared"],
-                events_deleted=_maintenance["events_deleted"] + retention["events_deleted"],
+                **{
+                    key: _maintenance[key] + retention[key]
+                    for key in (
+                        "attributes_cleared",
+                        "events_deleted",
+                        "metric_attributes_cleared",
+                        "metric_points_deleted",
+                    )
+                },
             )
         except Exception as exc:  # never let cleanup kill the loop
             _maintenance.update(last_ok=False, last_error=str(exc))
@@ -185,6 +201,41 @@ async def ingest_logs(request: Request):
     return JSONResponse(content={}, status_code=200)
 
 
+@app.post("/v1/metrics", dependencies=[Depends(require_auth)])
+async def ingest_metrics(request: Request):
+    """
+    Claude Code's pre-aggregated metrics stream (OTEL_METRICS_EXPORTER=otlp).
+
+    This exists partly so it cannot 404. Clients set the *generic*
+    OTEL_EXPORTER_OTLP_ENDPOINT, which applies to every signal — so the moment
+    anyone enabled metrics, Claude Code posted here on every export interval
+    and got a 404 back, silently, forever.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="Payload too large")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body is not valid JSON")
+
+    try:
+        points, skipped = extract_metric_points(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Malformed OTLP payload: {exc}")
+
+    if skipped:
+        log.warning("Dropped %d unusable metric point(s) from a batch", skipped)
+
+    inserted, duplicates = await asyncio.to_thread(db.write_metric_points, points)
+    if duplicates:
+        log.info("Ignored %d duplicate metric point(s) — likely an exporter retry", duplicates)
+
+    # OTLP/HTTP success response is an empty ExportMetricsServiceResponse body.
+    return JSONResponse(content={}, status_code=200)
+
+
 @app.get("/healthz")
 async def healthz():
     """
@@ -227,14 +278,21 @@ async def get_usage_by_model():
     return db.fetch_usage_by_model()
 
 
+# These two are the only reads moved off the event loop, because they are the
+# only ones that can run a *Python* callback per row: with a non-UTC
+# displayTimeZone, bucketing calls into `local_bucket` for every matching
+# event. On an all-time chart over a large table that is long enough to stall
+# every other request, /healthz included — the same failure the write path was
+# moved off the loop to avoid. Every other read is pure SQL and stays inline.
+
 @app.get("/api/usage-over-time", dependencies=[Depends(require_auth)])
 async def get_usage_over_time(hours: int = 24):
-    return db.fetch_usage_over_time(hours=_window(hours))
+    return await asyncio.to_thread(db.fetch_usage_over_time, _window(hours))
 
 
 @app.get("/api/usage-over-time-by-project", dependencies=[Depends(require_auth)])
 async def get_usage_over_time_by_project(hours: int = 24):
-    return db.fetch_usage_over_time_by_project(hours=_window(hours))
+    return await asyncio.to_thread(db.fetch_usage_over_time_by_project, _window(hours))
 
 
 class SessionUpdate(BaseModel):
@@ -325,6 +383,17 @@ async def get_prompts(hours: int = 24, limit: int = 25):
 @app.get("/api/audit", dependencies=[Depends(require_auth)])
 async def get_audit(hours: int = 168):
     return db.fetch_audit(hours=_window(hours))
+
+
+@app.get("/api/metrics", dependencies=[Depends(require_auth)])
+async def get_metrics(hours: int = 168):
+    """
+    Claude Code's own metrics, and the productivity ratios derived from them.
+
+    Defaults to a week rather than a day: commits and pull requests are sparse
+    enough that a 24h window is usually all zeroes even on an active fleet.
+    """
+    return db.fetch_metrics(hours=_window(hours))
 
 
 @app.get("/api/export.csv", dependencies=[Depends(require_auth)])

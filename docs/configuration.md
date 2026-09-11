@@ -27,9 +27,9 @@ cp .env.example .env
 | `BACKUP_SSH_KNOWN_HOSTS` | *(empty)* | Path inside the container to a `known_hosts` file. Set it to verify the destination's host key; without it the connection is accepted blind and the status says so. |
 | `LOG_LEVEL` | `INFO` | Level for this application's loggers. Backup and purge activity is logged at INFO; third-party loggers stay at WARNING regardless. |
 | `DB_BUSY_TIMEOUT_SECONDS` | `15` | How long a write waits for the SQLite lock before failing. A failure here becomes a 500, which an exporter retries — waiting is better. |
-| `MAX_LOG_BODY_BYTES` | `33554432` (32 MB) | Largest accepted `POST /v1/logs` body. `/v1/logs` is not proxied through nginx, so nginx's own limit never applies to it. |
-| `RAW_ATTRIBUTES_RETENTION_DAYS` | `0` (off) | Null `raw_attributes` on events older than this. Reclaims most of the disk without changing a single displayed number — reach for this first. |
-| `RETENTION_DAYS` | `0` (off) | **Delete** events older than this, and the sessions left empty by it. This does change historical totals, which is why it is off by default. |
+| `MAX_LOG_BODY_BYTES` | `33554432` (32 MB) | Largest accepted `POST /v1/logs` **and `POST /v1/metrics`** body. Neither is proxied through nginx, so nginx's own limit never applies to them. |
+| `RAW_ATTRIBUTES_RETENTION_DAYS` | `0` (off) | Null `raw_attributes` on events and metric points older than this. Reclaims most of the disk without changing a single displayed number — reach for this first. |
+| `RETENTION_DAYS` | `0` (off) | **Delete** events and metric points older than this, and the sessions left empty by it. This does change historical totals, which is why it is off by default. |
 
 Backup variables are covered in depth in [Backup and restore](backup-and-restore.md).
 
@@ -104,6 +104,7 @@ a reload.
 | `defaultTimeWindow` | `'24h'` | Chart window on first load (`24h` / `7d` / `30d` / `all`) |
 | `defaultMetric` | `'cost'` | Chart metric on first load (`cost` / `tokens`) |
 | `costAlertThresholdPerHour` | `null` | Warning banner when the hourly spend rate exceeds this |
+| `displayTimeZone` | `'UTC'` | IANA zone name. Chart days and the budget period start at midnight in this zone; storage stays UTC. Rejected on save if `zoneinfo` does not know it. |
 
 Values are validated on write; an out-of-range one returns `400` rather than
 being silently stored. A partial `PUT` merges, so a newer dashboard talking to

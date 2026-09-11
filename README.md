@@ -15,7 +15,7 @@ Full documentation lives in [`docs/`](docs/README.md):
 | [Configuration](docs/configuration.md) | Every variable, port, and volume |
 | [API reference](docs/api-reference.md) | All endpoints and payload shapes |
 | [Data model](docs/data-model.md) | SQLite schema and OTLP attribute mapping |
-| [Dashboard guide](docs/dashboard.md) | The four views and their controls |
+| [Dashboard guide](docs/dashboard.md) | The five views and their controls |
 | [Deployment](docs/deployment.md) · [Backup](docs/backup-and-restore.md) · [Security](docs/security.md) · [Troubleshooting](docs/troubleshooting.md) | Running it |
 | [Development](docs/development.md) | Repo layout, tests, extending it |
 | [Known issues](docs/known-issues.md) · [Roadmap](docs/roadmap.md) | Outstanding defects and proposed work |
@@ -31,13 +31,16 @@ required on the sending side). `ingest` stores them in SQLite; `dashboard` polls
 Claude Code session(s)  --OTLP/HTTP-->  ingest (FastAPI + SQLite)  <--/api/*--  dashboard (SolidJS, via nginx)
    (dev container A)                          |
    (dev container B)                          ▼
-   (dev container ...)                  usage.db (sessions, usage_events)
+   (dev container ...)                  usage.db (sessions, usage_events, metric_points)
 ```
 
 ## Components
 
 - **`ingest/`** — FastAPI service.
   - `POST /v1/logs` — accepts OTLP/JSON log exports (what Claude Code sends).
+  - `POST /v1/metrics` — accepts OTLP/JSON metric exports: commits, pull
+    requests, active time, lines of code, edit decisions. Optional on the
+    client; drives the productivity ratios on `/insights`.
   - `GET /api/summary`, `/api/sessions`, `/api/usage-by-model` — read endpoints for the dashboard.
   - `GET /healthz` — unauthenticated health check.
   - Data lives in SQLite (`usage.db` locally, `/data/usage.db` in the container).
@@ -49,8 +52,8 @@ Claude Code session(s)  --OTLP/HTTP-->  ingest (FastAPI + SQLite)  <--/api/*--  
 # ingest
 cd ingest
 python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt   # includes httpx, needed for test_ingest.py
-.venv/bin/python test_ingest.py                 # optional: run the smoke test
+.venv/bin/pip install -r requirements-dev.txt   # adds httpx and pytest
+.venv/bin/python -m pytest                      # optional: run the test suite
 INGEST_ALLOW_ANONYMOUS=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 # dashboard (separate terminal)
@@ -115,3 +118,7 @@ Notes:
   container, so it's the most exposed part of this stack.
 - The dashboard's nginx injects the token server-side when proxying `/api/*`
   to `ingest`; the token never ships in the browser bundle.
+
+## Licence
+
+[MIT](LICENSE).

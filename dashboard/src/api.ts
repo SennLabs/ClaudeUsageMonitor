@@ -117,6 +117,66 @@ export interface FleetRow {
   last_seen_at: string
 }
 
+/** One row of a metric grouped by an attribute (start type, active-time type, ...). */
+export interface MetricGroup {
+  name: string
+  total: number
+}
+
+export interface EditDecision {
+  language: string
+  accepted: number
+  rejected: number
+  /** null when nothing was decided in this language — distinct from 0%. */
+  acceptance_rate: number | null
+}
+
+/**
+ * Claude Code's pre-aggregated metrics stream, and the ratios derived from it.
+ * Every `derived` figure is null rather than 0 when its denominator is zero:
+ * "no commits recorded" and "$0.00 per commit" are different statements.
+ */
+export interface ProductivityMetrics {
+  window_hours: number | null
+  /** false means nothing has ever arrived on /v1/metrics. */
+  reporting: boolean
+  /** Running totals, excluded from every sum. Fixable with a client setting. */
+  cumulative_points_ignored: number
+  /** Gauges and the like — not summable, and no client setting changes that. */
+  unsummable_points: number
+  totals: {
+    lines_added: number
+    lines_removed: number
+    commits: number
+    pull_requests: number
+    active_seconds: number
+    sessions_started: number
+  }
+  /** Restricted to sessions that also report metrics — matches `derived`. */
+  cost_usd: number
+  /** Every session in the window, the figure /api/summary agrees with. */
+  cost_usd_fleet: number
+  /** cost_usd / cost_usd_fleet. Below 1, `derived` describes a subset. */
+  metrics_cost_coverage: number | null
+  /** The metrics stream's own cost counter, for cross-checking `cost_usd`. */
+  cost_usd_from_metrics: number
+  derived: {
+    cost_per_commit: number | null
+    cost_per_pull_request: number | null
+    cost_per_active_hour: number | null
+    usd_per_1k_lines: number | null
+    lines_per_active_hour: number | null
+  }
+  sessions_by_start_type: MetricGroup[]
+  active_time_by_type: MetricGroup[]
+  tokens_by_type: MetricGroup[]
+  edit_decisions: EditDecision[]
+  by_metric: { metric_name: string; points: number; total: number }[]
+}
+
+export const fetchProductivityMetrics = (hours = 168) =>
+  getJSON<ProductivityMetrics>(`/metrics?hours=${hours}`)
+
 export const fetchAttribution = (hours = 24) =>
   getJSON<Attribution>(`/attribution?hours=${hours}`)
 export const fetchLatency = (hours = 24) => getJSON<Latency>(`/latency?hours=${hours}`)
@@ -267,6 +327,8 @@ export interface AppSettings {
   defaultTimeWindow: TimeWindow
   defaultMetric: Metric
   costAlertThresholdPerHour: number | null
+  /** IANA zone name. Buckets days to local midnight rather than UTC midnight. */
+  displayTimeZone: string
   /** Read-only: set by the operator via ACTIVE_WINDOW_MINUTES. */
   activeSessionWindowMin: number
 }

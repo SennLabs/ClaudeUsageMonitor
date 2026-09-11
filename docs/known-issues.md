@@ -1,7 +1,12 @@
 # Known issues — to be done
 
 Compiled 2026-09-10 from a four-way review of the codebase (backend, frontend,
-security/deployment, docs-vs-code). Nothing here is fixed yet.
+security/deployment, docs-vs-code), plus items found since. Each entry carries
+its own status; as of 2026-09-11 everything here is fixed except
+[21](#21-container-and-deployment-hardening),
+[22](#22-healthchecks-pass-in-the-situations-that-actually-break-the-system)
+and [28](#28-touch-and-kiosk-ergonomics-on-tablet), all three *partial* and all
+three blocked on deployment-specific detail rather than on code.
 
 **Verification status** is marked on each item:
 
@@ -59,6 +64,7 @@ single-instance internal tool on a private network.
 - [ ] [28. Touch and kiosk ergonomics on `/tablet`](#28-touch-and-kiosk-ergonomics-on-tablet) — *partial*
 - [x] [29. TypeScript `strict` is off](#29-typescript-strict-is-off) — *fixed*
 - [x] [30. Backup SSH trust and argument quoting](#30-backup-ssh-trust-and-argument-quoting) — *fixed*
+- [x] [32. A sub-dollar cost chart draws flat along the bottom](#32-a-sub-dollar-cost-chart-draws-flat-along-the-bottom) — *fixed*
 
 **D. Documentation corrections**
 
@@ -539,6 +545,8 @@ R2; the size cap should be done here.
 
 **Fixed 2026-09-10.** The suite sets `DB_PATH` to a `tempfile.mkdtemp()` scratch database *before* importing `app.db` (which resolves it at import time), removes the directory via `atexit`, and `_reset_db` now asserts it is operating inside that directory before unlinking anything. It also clears the `-wal`/`-shm` sidecars, which were previously left behind.
 
+**Hardened 2026-09-11** with the move to pytest ([R14](roadmap.md#r14-adopt-pytest-and-stop-the-tests-eating-the-dev-database)): the redirection moved into `ingest/conftest.py`, the only file pytest is guaranteed to load before importing any test module. The protection no longer depends on statement order inside the test file, which is what would have quietly broken the moment a second test module was added.
+
 `_reset_db` unlinks `db_module.DB_PATH`, which defaults to `ingest/usage.db` —
 the exact file local development writes to — before every test. Both
 `getting-started.md` and `development.md` recommend running it with no warning.
@@ -653,6 +661,38 @@ it on will surface real null-handling gaps around the resource accessors.
   from the operator's environment — but cheap to close.
 
 ---
+
+### 32. A sub-dollar cost chart draws flat along the bottom
+
+*Status: **fixed**. [verified]*
+
+**Found and fixed 2026-09-11** while writing the Vitest suite
+([R13](roadmap.md#r13-turn-on-typescript-strict-mode-and-add-frontend-tests)) —
+which is the argument for having written it.
+
+`niceMax` in the chart applied its "round up to a multiple of 4" rule to *every*
+value below 8, including fractional ones. That rule exists for **token** axes,
+where five ticks at quarter steps must land on distinct integers (a max of 5
+gave `0 1 2 4 5` with duplicates after rounding). On a **cost** axis it is
+wrong: a window whose highest bucket was $0.04 produced
+
+```
+Math.max(4, Math.ceil(0.04 / 4) * 4)  ->  4
+```
+
+— a $4.00 axis for a $0.04 peak, drawing the line flat along the bottom at 1%
+of the plot height and making every bucket look identical. Any day under $8 of
+spend was compressed; anything under about $0.50 was unreadable.
+
+The adjacent comment in `fmtY` ("niceMax can return sub-cent maxima, where
+toFixed(2) rendered every tick as an identical $0.00") shows the author
+expected sub-unit maxima to reach it. They never could, so that precision
+scaling was dead code for cost.
+
+Fixed by returning `rounded` unchanged when it is below 1, before the integer
+rule. Token counts are integers, so the only token value that can reach that
+branch is 0, which is handled above it — the two metrics do not need separate
+code paths. Covered by `chart.test.ts`.
 
 ## D. Documentation corrections
 
@@ -792,7 +832,7 @@ Recorded so they are not re-litigated.
 | Purge orphans billable events | **[narrowed]** Could not reproduce. Requires the purge to land in the microsecond gap between `upsert_session` and `insert_event` for one record; a later event simply recreates the session row. The real, milder version: a session that idles past the window before its first real use has its `first_seen_at` reset on resume. Nothing billable is lost — by construction the purge only touches zero-usage sessions. |
 | `set_user_project` overwrites hand-set labels | Intentional and documented — re-saving a link is an explicit instruction. Worth reconsidering as a UX choice, not a bug. |
 | Non-constant-time token comparison | Real but not practically exploitable at this token entropy over a LAN. Fix opportunistically (item 18). |
-| SQL injection | **None.** `_time_bucket_fmt` returns one of two module-level literals chosen by an already-validated int; `_window_clause` formats a hardcoded column name supplied by code; the purge f-string interpolates only generated `?` placeholders. Every user-controlled value is a bound parameter. |
+| SQL injection | **None.** `_bucket_sql()` returns one of two literals chosen by an already-validated int (or a registered function name); `_window_clause` formats a hardcoded column name supplied by code; the purge f-string interpolates only generated `?` placeholders. Every user-controlled value is a bound parameter. |
 | Path traversal | **None.** `session_id`/`user_id` are only ever bind parameters and never touch the filesystem. `/api/backup/trigger` takes no parameters. nginx uses `root` + `try_files`, no `alias`. |
 | Command injection | **None.** `subprocess.run` takes an argument list, no `shell=True`, and the only interpolated values come from the operator's environment at import time. |
 | Token leaking into the browser bundle | **Cannot happen.** `api.ts` uses a relative base with no auth header, there is no `VITE_*` reference, the token is a runtime env var on the serve stage, and `proxy_set_header` overrides anything a client sends. |

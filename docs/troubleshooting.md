@@ -257,13 +257,29 @@ raise `ACTIVE_WINDOW_MINUTES`.
 Fixed — but worth knowing what it was, since the shape can recur. The `hours`
 prop was being passed to `<UsageChart>` *after* the props spread, so it always
 won at 24, and the chart formatted every bucket as a clock time. Daily buckets
-are UTC midnight, so in UTC+8 every day rendered as `08:00`.
+were UTC midnight, so in UTC+8 every day rendered as `08:00`.
 
 Label format now follows the bucket granularity, which mirrors the server's
-`_time_bucket_fmt`: hourly buckets get a clock time, daily buckets get a date.
-If it regresses, check that nothing is overriding `hours` on the component and
+`_granularity()`: hourly buckets get a clock time, daily buckets get a date. If
+it regresses, check that nothing is overriding `hours` on the component and
 that `WINDOW_HOURS` in [`settings.ts`](../dashboard/src/settings.ts) still
 matches the server's 48-hour cutover.
+`npm test` covers the label functions directly
+([`chart.test.ts`](../dashboard/src/chart.test.ts)), so run it first.
+
+## Chart days don't line up with my days
+
+Expected under the default. Buckets are named in UTC unless you say otherwise,
+so in UTC+8 a "day" on the chart runs 08:00 to 08:00 local. Set **Display time
+zone** on `/settings` (or `displayTimeZone` via `PUT /api/settings`) to your
+IANA zone — `Australia/Perth`, say — and daily buckets become local days. The
+budget period moves with it, starting at local midnight on the cycle day.
+
+Nothing is rewritten: timestamps are stored in UTC and stay that way, so
+switching zones relabels the buckets and changes no total. If the setting seems
+to have no effect, check `GET /api/settings` actually returns the zone you set
+— an unresolvable name falls back to UTC rather than raising, and a missing
+`tzdata` package in a rebuilt image is the way that happens.
 
 ---
 
@@ -285,6 +301,40 @@ sqlite3 ./usage-data/usage.db "SELECT * FROM user_projects;"
 
 Sessions arriving with no `user.id` attribute at all cannot be mapped this way —
 tag those individually from the Sessions table.
+
+---
+
+## Productivity panel says no metrics received
+
+The metrics stream is **optional and off by default**. Everything else on
+`/insights` comes from the logs stream and works without it; the Productivity
+panel is the only thing that needs it.
+
+To turn it on, add three lines to each reporting client and restart Claude Code
+there — see
+[Client setup → the metrics stream](client-setup.md#optional-the-metrics-stream).
+Metrics flush every 60 seconds by default, so allow a minute or two.
+
+If it is enabled and still empty:
+
+```bash
+# Has anything at all arrived?
+sqlite3 ./usage-data/usage.db \
+  "SELECT metric_name, COUNT(*), MAX(occurred_at) FROM metric_points GROUP BY 1;"
+```
+
+| What you see | Cause |
+| --- | --- |
+| No `metric_points` table | The service has not restarted since the upgrade. `init_db()` creates it at startup. |
+| Table exists, no rows | Nothing is posting. Check `docker compose logs ingest` for `POST /v1/metrics` and for 401s — the metrics exporter uses the same `OTEL_EXPORTER_OTLP_HEADERS` as the logs one, so if logs work, auth is not the problem. |
+| Rows exist, panel shows zeroes | Almost always temporality. `/api/metrics` returns `cumulative_points_ignored` — if that is non-zero, set `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` on the client. Summing running totals would count the same work once per export interval, so they are excluded deliberately. |
+| Some panels populated, commits and PRs at zero | Expected on a quiet week. Those counters only move when Claude Code actually makes a commit or opens a PR. Widen the window. |
+
+**Cost cross-check warning on the panel.** Both cost figures are produced by
+the same client from the same API responses, so a gap between them is a
+delivery problem — a dropped or duplicated export on one of the two streams —
+not a disagreement about prices. Check the ingest log for 5xx responses around
+the period in question.
 
 ---
 

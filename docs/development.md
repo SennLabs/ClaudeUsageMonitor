@@ -9,14 +9,17 @@
 ├── docs/                     This documentation
 ├── ingest/                   FastAPI collector + read API
 │   ├── Dockerfile
-│   ├── requirements.txt      Runtime deps (fastapi, uvicorn)
-│   ├── requirements-dev.txt  Adds httpx for the smoke test
+│   ├── requirements.txt      Runtime deps (fastapi, uvicorn, tzdata)
+│   ├── requirements-dev.txt  Adds httpx and pytest for the test suite
+│   ├── pytest.ini            pythonpath, testpaths, default flags
+│   ├── conftest.py           Redirects DB_PATH to a scratch dir before import
 │   ├── schema.sql            Tables and indexes
-│   ├── test_ingest.py        End-to-end smoke test
+│   ├── test_ingest.py        End-to-end test suite
 │   ├── dedupe.py             One-off cleanup of pre-existing retry duplicates
 │   └── app/
 │       ├── main.py           Routes, auth, CORS, lifespan
-│       ├── otlp.py           OTLP JSON → LogEvent (pure, no I/O)
+│       ├── otlp.py           OTLP logs JSON → LogEvent (pure, no I/O)
+│       ├── otlp_metrics.py   OTLP metrics JSON → MetricPoint (pure, no I/O)
 │       ├── db.py             Connections, schema init, all SQL
 │       └── backup.py         Snapshot, ship, prune, schedule, status
 └── dashboard/                SolidJS + Vite + Tailwind v4
@@ -25,14 +28,19 @@
     ├── vite.config.ts        Dev proxy to 127.0.0.1:8000
     ├── index.html            Pre-paint theme script
     └── src/
-        ├── index.tsx         Router: / , /tablet , /settings
+        ├── index.tsx         Router: / , /tablet , /insights , /users , /settings
         ├── api.ts            All fetch calls + response types
-        ├── settings.ts       localStorage prefs, rate & cost helpers
+        ├── settings.ts       Window constants and options
+        ├── settingsStore.ts  The one shared server-settings resource
+        ├── resource.ts       latest() / firstError() — safe resource reads
+        ├── chart.ts          Pure chart maths and label formatting
+        ├── chart.test.ts     Vitest: bucket labels, niceMax, axis formatting
         ├── format.ts         Number, cost, and date formatting
+        ├── format.test.ts    Vitest: token/cost abbreviation thresholds
         ├── index.css         Tailwind entry, dark-variant remap
         └── components/       SummaryCards, SessionsTable, UsageChart,
                               ModelBreakdown, TabletDashboard, UsersPage,
-                              SettingsPage, ThemeToggle
+                              InsightsPage, SettingsPage, ThemeToggle
 ```
 
 ## Local setup
@@ -54,29 +62,64 @@ setting it just produces 401s.
 
 ## Tests
 
-One smoke test, [`ingest/test_ingest.py`](../ingest/test_ingest.py), run
-directly rather than through pytest:
+Both suites are run by hand before any change set is considered done. There is
+no CI ([R11](roadmap.md#r11-continuous-integration) is deferred by decision),
+so this is the only guard against regressions — it is not optional.
+
+### Backend — pytest
 
 ```bash
 cd ingest
-.venv/bin/python test_ingest.py
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest              # the whole suite, ~2s
+.venv/bin/python -m pytest -k metrics   # one area
+.venv/bin/python -m pytest -x -vv       # stop at the first failure, verbose
 ```
 
-It covers, in order: OTLP ingestion into SQLite, the bearer-token gate,
-user→project mapping (retroactive, forward-applying and clearable), the
-empty-session purge, and the time windows (that a 24h window excludes 30h-old
-data, and that `hours=0` returns all time). Each test starts from a fresh
-database via `_reset_db`, and `make_payload` builds a one-record OTLP payload
-with a controllable age and token count.
+[`ingest/test_ingest.py`](../ingest/test_ingest.py) drives the real FastAPI app
+through `TestClient` rather than calling `db.py` directly — the interesting
+failures have historically been in the seams (the OTLP envelope, transaction
+boundaries, the auth dependency, the lifespan), not in a single function.
 
-The thing to remember: `DB_PATH`, `AUTH_TOKEN` and `ALLOW_ANONYMOUS` are all
-read at **import time**. `DB_PATH` is therefore set before `app.db` is imported
-at the top of the file, and a test that changes `INGEST_AUTH_TOKEN` mid-run must
-`importlib.reload(main_module)` afterwards — as `test_auth_gating` and
-`test_refuses_to_start_without_a_token` both do.
+Each test starts from a fresh database via `_reset_db()`. `make_payload` builds
+a one-record OTLP *logs* payload with a controllable age, token count and
+project; `make_metrics_payload` does the same for a one-point *metrics* payload.
 
-There are no frontend tests. `npm run build` runs `tsc -b` first, so a type
-error fails the build — treat that as the frontend's check.
+Two things to remember:
+
+- **`DB_PATH`, `AUTH_TOKEN` and `ALLOW_ANONYMOUS` are read at import time.**
+  `DB_PATH` is therefore redirected in [`conftest.py`](../ingest/conftest.py),
+  which pytest loads before it imports any test module — without that, the
+  suite deleted `ingest/usage.db`, the file local development writes to.
+  `_reset_db()` asserts it is pointed at the scratch directory before
+  unlinking anything.
+- **A test that reloads `app.main` must restore it.** `test_auth_gating` and
+  `test_refuses_to_start_without_a_token` both `importlib.reload(main_module)`
+  in a `finally`, so they work in any order. pytest guarantees no ordering;
+  do not rely on one.
+
+### Frontend — Vitest
+
+```bash
+cd dashboard
+npm test              # once
+npm run test:watch    # on change
+```
+
+[`chart.test.ts`](../dashboard/src/chart.test.ts) and
+[`format.test.ts`](../dashboard/src/format.test.ts) cover the pure logic most
+likely to break silently: bucket label parsing (which must not depend on the
+browser's time zone), `niceMax`'s axis rounding, and the token/cost
+abbreviation thresholds.
+
+They run in the `node` environment via
+[`vitest.config.ts`](../dashboard/vitest.config.ts) — no DOM, no Solid plugin,
+no jsdom dependency — because everything under test is a pure function.
+`chart.ts` exists precisely so that logic can be imported without mounting a
+component. A future *component* test would need `environment: 'jsdom'`, the
+Solid plugin and `@solidjs/testing-library`; add them then.
+
+`npm run build` runs `tsc -b` first, so a type error fails the build. Run both.
 
 ## Adding an API endpoint
 
@@ -95,7 +138,7 @@ error fails the build — treat that as the frontend's check.
 
 Never interpolate user input into SQL. `hours` reaches the query as a bound
 parameter; the only interpolated value anywhere is the bucket format string,
-which comes from `_time_bucket_fmt`'s two literals.
+which comes from `_bucket_sql()`'s two literals.
 
 ## Adding a telemetry attribute
 
@@ -142,23 +185,42 @@ and a [backup](backup-and-restore.md) taken first.
 - **Sparse series.** Time-series endpoints omit empty buckets. Anything
   consuming them must handle gaps rather than assuming contiguity.
 - **Bucket granularity lives in two places.** The server picks it in
-  `_time_bucket_fmt`; the chart mirrors it in `granularityFor` to choose the
-  axis label format. Change one and you must change the other, or daily buckets
-  start rendering as clock times again.
+  `_granularity()`; the chart mirrors it in `granularityFor` (in
+  [`chart.ts`](../dashboard/src/chart.ts), covered by `chart.test.ts`) to choose
+  the axis label format. Change one and you must change the other, or daily
+  buckets start rendering as clock times again.
+- **Never build a `Date` from a bucket string.** The server already names each
+  bucket in the configured display zone; re-formatting through a `Date` applies
+  the *browser's* zone a second time and shifts the label off its own bucket.
+  Read the characters — that is what `parts()` in `chart.ts` is for.
 - **Watch prop order with spreads.** `<UsageChart {...chartProps()} hours={24}
   />` silently overrides the spread `hours` — that was exactly the axis-label
   bug. Put explicit props before the spread, or don't duplicate them.
 
 ## Adding a settings field
 
-1. Add it to `AppSettings` and `DEFAULT_SETTINGS` in
-   [`settings.ts`](../dashboard/src/settings.ts). `loadSettings` spreads
-   defaults under the stored object, so existing browsers pick up the new field
-   without a reset.
-2. Add a `<Field>` to the relevant `<Section>` in `SettingsPage.tsx`.
-3. Read it where it applies.
+Settings live **on the server** (a single JSON row in `app_settings`), so a new
+field touches both sides:
 
-Remember these are per-browser and never reach the server.
+1. Add it to `DEFAULT_SETTINGS` in [`db.py`](../ingest/app/db.py). Unknown keys
+   are ignored on write and defaults are merged under the stored object, so
+   there is **no migration** — an older stored row picks up the new default.
+2. Add a branch to `_coerce_setting()` validating it. Raise `ValueError` for a
+   bad value; the route turns that into a `400`. A setting with no branch is
+   rejected as unknown, so this step is not optional.
+3. Add it to `AppSettings` in [`api.ts`](../dashboard/src/api.ts) and to
+   `FALLBACK_SETTINGS` in
+   [`settingsStore.ts`](../dashboard/src/settingsStore.ts) — the fallback is
+   what every view reads until the first fetch resolves.
+4. Add a signal, a seed line in the `createEffect`, and a line in the `patch`
+   object in `SettingsPage.tsx`, then a `<Field>` in the relevant `<Section>`.
+5. Read it anywhere via `settings()`, which never throws and never returns
+   undefined.
+6. Document it in [Configuration](configuration.md#dashboard-preferences) and
+   in the `GET /api/settings` example in [API reference](api-reference.md).
+
+Only genuinely per-device preferences stay in `localStorage` — currently just
+the theme.
 
 ## Adding a time window
 

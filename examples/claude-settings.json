@@ -9,7 +9,12 @@
     "Do NOT put a real token in a committed <repo>/.claude/settings.json.",
     "",
     "Replace: <INGEST_HOST>, <INGEST_AUTH_TOKEN>, <PROJECT_NAME>.",
-    "Settings are read at session start — restart Claude Code after editing."
+    "Settings are read at session start — restart Claude Code after editing.",
+    "",
+    "The metrics block is optional. It adds commits, pull requests, active",
+    "time, lines of code and edit-acceptance rate, which is what the",
+    "Productivity panel on /insights is computed from. Leave it out and",
+    "everything else still works."
   ],
   "env": {
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
@@ -18,6 +23,10 @@
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://<INGEST_HOST>:9585",
     "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer <INGEST_AUTH_TOKEN>",
     "OTEL_LOGS_EXPORT_INTERVAL": "5000",
+
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_METRIC_EXPORT_INTERVAL": "60000",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta",
 
     "OTEL_RESOURCE_ATTRIBUTES": "project=<PROJECT_NAME>"
   }

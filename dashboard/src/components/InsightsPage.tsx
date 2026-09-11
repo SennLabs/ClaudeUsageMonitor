@@ -8,6 +8,7 @@ import {
   fetchErrorStats,
   fetchFleet,
   fetchLatency,
+  fetchProductivityMetrics,
   fetchPrompts,
   fetchToolStats,
 } from '../api'
@@ -107,6 +108,9 @@ export default function InsightsPage() {
   const [audit, { refetch: refetchAudit }] = createResource(activeWindow, (w) =>
     fetchAudit(WINDOW_HOURS[w]),
   )
+  const [productivity, { refetch: refetchProductivity }] = createResource(activeWindow, (w) =>
+    fetchProductivityMetrics(WINDOW_HOURS[w]),
+  )
 
   createEffect(() => {
     const timer = setInterval(() => {
@@ -118,14 +122,20 @@ export default function InsightsPage() {
       refetchCache()
       refetchPrompts()
       refetchAudit()
+      refetchProductivity()
     }, settings().refreshIntervalMs)
     onCleanup(() => clearInterval(timer))
   })
 
   const apiError = () =>
-    firstError(attribution, latency, errors, tools, fleet, cache, prompts, audit)
+    firstError(attribution, latency, errors, tools, fleet, cache, prompts, audit, productivity)
   const ms = (v: number | null | undefined) => (v == null ? '—' : `${formatNumber(v)} ms`)
   const pct = (v: number | null | undefined) => (v == null ? '—' : `${(v * 100).toFixed(1)}%`)
+  // A ratio with no denominator reads '—', never '$0.00' — the two mean
+  // opposite things, and $0.00 per commit looks like a win.
+  const money = (v: number | null | undefined) => (v == null ? '—' : formatCost(v))
+  const hoursOf = (seconds: number) =>
+    seconds >= 3600 ? `${(seconds / 3600).toFixed(1)} h` : `${Math.round(seconds / 60)} min`
 
   return (
     <div class="min-h-screen">
@@ -186,6 +196,150 @@ export default function InsightsPage() {
             panel below.
           </div>
         </Show>
+
+        <Panel
+          title="Productivity"
+          hint="From Claude Code's metrics stream (OTEL_METRICS_EXPORTER=otlp), which is separate from the events everything else here is built on. Spend says how much went out; these say whether it bought anything."
+        >
+          <Show when={latest(productivity)} fallback={<Empty>Loading…</Empty>}>
+            {(m) => (
+              <Show
+                when={m().reporting}
+                fallback={
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+                    No metrics received yet. Clients send these only with{' '}
+                    <code class="font-mono text-xs">OTEL_METRICS_EXPORTER=otlp</code> set — see{' '}
+                    <code class="font-mono text-xs">docs/client-setup.md</code>. Everything else on
+                    this page works without it.
+                  </div>
+                }
+              >
+                {/* The ratios divide cost by counters that only metrics-enabled
+                    clients produce, so the numerator is scoped to those same
+                    sessions. On a partial rollout that is a correct number
+                    about a subset — which has to be said, or it reads as a
+                    number about the fleet. */}
+                <Show when={(m().metrics_cost_coverage ?? 1) < 0.99}>
+                  <p class="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+                    These ratios cover {pct(m().metrics_cost_coverage)} of spend in this window
+                    ({formatCost(m().cost_usd)} of {formatCost(m().cost_usd_fleet)}) — only the
+                    clients with the metrics exporter enabled. They describe that subset, not the
+                    whole fleet.
+                  </p>
+                </Show>
+
+                <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                  <Stat label="cost / commit" value={money(m().derived.cost_per_commit)} />
+                  <Stat label="cost / PR" value={money(m().derived.cost_per_pull_request)} />
+                  <Stat label="cost / active hour" value={money(m().derived.cost_per_active_hour)} />
+                  <Stat label="$ / 1k lines" value={money(m().derived.usd_per_1k_lines)} />
+                  <Stat
+                    label="lines / active hour"
+                    value={
+                      m().derived.lines_per_active_hour == null
+                        ? '—'
+                        : formatNumber(Math.round(m().derived.lines_per_active_hour!))
+                    }
+                  />
+                </div>
+
+                <div class="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-5 dark:border-slate-800">
+                  <Stat label="commits" value={formatNumber(m().totals.commits)} />
+                  <Stat label="pull requests" value={formatNumber(m().totals.pull_requests)} />
+                  <Stat label="active time" value={hoursOf(m().totals.active_seconds)} />
+                  <Stat
+                    label="lines +/−"
+                    value={`${formatNumber(m().totals.lines_added)} / ${formatNumber(m().totals.lines_removed)}`}
+                  />
+                  <Stat label="sessions started" value={formatNumber(m().totals.sessions_started)} />
+                </div>
+
+                <Show when={m().edit_decisions.length > 0}>
+                  <table class="mt-4 w-full text-sm">
+                    <thead>
+                      <tr class="text-left text-xs text-slate-500 dark:text-slate-400">
+                        <th class="py-1 font-medium">Language</th>
+                        <th class="py-1 text-right font-medium">Accepted</th>
+                        <th class="py-1 text-right font-medium">Rejected</th>
+                        <th class="py-1 text-right font-medium">Acceptance</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                      <For each={m().edit_decisions}>
+                        {(row) => (
+                          <tr>
+                            <td class="py-1.5 font-mono text-xs text-slate-800 dark:text-slate-200">
+                              {row.language}
+                            </td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-500">
+                              {formatNumber(row.accepted)}
+                            </td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-500">
+                              {formatNumber(row.rejected)}
+                            </td>
+                            <td
+                              class="py-1.5 text-right tabular-nums"
+                              classList={{
+                                'text-amber-600 dark:text-amber-400':
+                                  row.acceptance_rate !== null && row.acceptance_rate < 0.5,
+                              }}
+                            >
+                              {pct(row.acceptance_rate)}
+                            </td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </Show>
+
+                {/* Compared against the *scoped* event cost, so both sides cover
+                    the same sessions. Both are produced by the same client from
+                    the same API responses, which makes a gap a delivery problem
+                    — a dropped or duplicated export — rather than an artefact of
+                    a partial rollout or a disagreement about prices. */}
+                <Show
+                  when={
+                    m().cost_usd_from_metrics > 0 &&
+                    Math.abs(m().cost_usd_from_metrics - m().cost_usd) >
+                      0.01 + 0.02 * m().cost_usd
+                  }
+                >
+                  <p class="mt-3 text-xs text-amber-600 dark:text-amber-400">
+                    Cross-check: the metrics stream reports{' '}
+                    {formatCost(m().cost_usd_from_metrics)} for this window against{' '}
+                    {formatCost(m().cost_usd)} from the event stream. One of the two is losing
+                    exports.
+                  </p>
+                </Show>
+              </Show>
+            )}
+          </Show>
+
+          {/* Outside the `reporting` branch on purpose: a client stuck on
+              cumulative temporality IS reporting, but contributes to no total,
+              so this is the one message that explains a page of zeroes. */}
+          <Show when={(latest(productivity)?.cumulative_points_ignored ?? 0) > 0}>
+            <p class="mt-3 text-xs text-amber-600 dark:text-amber-400">
+              {formatNumber(latest(productivity)!.cumulative_points_ignored)} cumulative data
+              point(s) excluded — they are running totals, and summing them would count the same
+              work once per export interval. Set{' '}
+              <code class="font-mono">OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta</code>{' '}
+              on the reporting clients.
+            </p>
+          </Show>
+
+          {/* Kept separate from the cumulative message: a gauge carries no
+              temporality at all, so the client setting above would not change
+              it and suggesting it would waste someone's afternoon. */}
+          <Show when={(latest(productivity)?.unsummable_points ?? 0) > 0}>
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-500">
+              {formatNumber(latest(productivity)!.unsummable_points)} non-summable data point(s)
+              (gauges) received. They are stored and listed by metric name, but contribute to no
+              total — no client setting changes that.
+            </p>
+          </Show>
+        </Panel>
 
         <Panel
           title="Cache efficiency"

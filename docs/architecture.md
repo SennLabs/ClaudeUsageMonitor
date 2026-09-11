@@ -11,14 +11,15 @@
  │ dev container B      │──┼──POST /v1/logs────►┌───────────────────────┐
  │  Claude Code session │  │  (every 5s)        │ ingest                │
  └──────────────────────┘  │                    │ FastAPI + uvicorn     │
- ┌──────────────────────┐  │                    │ :8000 (host :9585)    │
- │ dev container …      │──┘                    └───────────┬───────────┘
- └──────────────────────┘                                   │
+ ┌──────────────────────┐  ├──POST /v1/metrics─►│ :8000 (host :9585)    │
+ │ dev container …      │──┘  (every 60s,       └───────────┬───────────┘
+ └──────────────────────┘      optional)                    │
                                                             ▼
                                                    ┌──────────────────┐
                                                    │ usage.db (SQLite)│
                                                    │ sessions         │
                                                    │ usage_events     │
+                                                   │ metric_points    │
                                                    └────────┬─────────┘
                                                             │ read queries
  ┌──────────────┐    GET /api/*    ┌────────────────────────┴──┐
@@ -41,7 +42,9 @@ responsibilities:
 
 1. **Accept telemetry.** `POST /v1/logs` receives OTLP/HTTP JSON
    `ExportLogsServiceRequest` payloads, flattens them into rows, and writes them
-   to SQLite.
+   to SQLite. `POST /v1/metrics` does the same for
+   `ExportMetricsServiceRequest` — Claude Code's pre-aggregated counters, which
+   are optional on the client and land in a separate table.
 2. **Serve aggregates.** The `/api/*` routes run grouped SQL queries and return
    JSON shaped for the dashboard's charts and tables. Aggregation happens in
    SQLite, not in the browser.
@@ -56,26 +59,28 @@ Module breakdown:
 | --- | --- |
 | [`app/main.py`](../ingest/app/main.py) | Routes, auth dependency, CORS, lifespan (DB init + backup scheduler) |
 | [`app/otlp.py`](../ingest/app/otlp.py) | Pure parser: OTLP JSON → `LogEvent` dataclasses. No I/O, no DB. |
+| [`app/otlp_metrics.py`](../ingest/app/otlp_metrics.py) | Pure parser: OTLP JSON → `MetricPoint` dataclasses. Shares the value decoders with `otlp.py`. |
 | [`app/db.py`](../ingest/app/db.py) | Connection handling, schema init/migration, all SQL |
 | [`app/backup.py`](../ingest/app/backup.py) | Snapshot, copy or rsync, retention, scheduler, status |
 | [`schema.sql`](../ingest/schema.sql) | Table and index definitions, applied idempotently on startup |
 
-The OTLP parser is deliberately isolated from the database layer: it turns a
-payload into dataclasses and nothing else, which is what makes
+Both OTLP parsers are deliberately isolated from the database layer: they turn
+a payload into dataclasses and nothing else, which is what makes
 [`test_ingest.py`](../ingest/test_ingest.py) able to exercise the full path
 against a throwaway SQLite file.
 
 ### `dashboard/` — SolidJS SPA behind nginx
 
-A Vite-built SolidJS app served as static files by nginx. Four routes, wired in
+A Vite-built SolidJS app served as static files by nginx. Five routes, wired in
 [`src/index.tsx`](../dashboard/src/index.tsx):
 
 | Route | Component | Purpose |
 | --- | --- | --- |
 | `/` | `App.tsx` | Full desktop dashboard |
 | `/tablet` | `components/TabletDashboard.tsx` | Large-type, glanceable wall/tablet view |
-| `/users` | `components/UsersPage.tsx` | Link dev-container user IDs to projects |
-| `/settings` | `components/SettingsPage.tsx` | Client-side preferences plus backup controls |
+| `/insights` | `components/InsightsPage.tsx` | Latency, errors, attribution, cache, audit, fleet, productivity |
+| `/users` | `components/UsersPage.tsx` | Link dev-container user IDs to projects (a fallback; see `OTEL_RESOURCE_ATTRIBUTES`) |
+| `/settings` | `components/SettingsPage.tsx` | Server-side preferences plus backup controls |
 
 Data access goes through one thin module, [`src/api.ts`](../dashboard/src/api.ts),
 which owns both the `fetch` calls and the TypeScript types describing every
@@ -102,7 +107,7 @@ events to the client and grouping there would not survive a few weeks of data.
 
 **Adaptive time buckets.** Windows of 48 hours or less bucket hourly; anything
 longer — including the all-time view, which passes `hours=0` and drops the
-look-back entirely — buckets daily (`_time_bucket_fmt` in
+look-back entirely — buckets daily (`_granularity()` in
 [`db.py`](../ingest/app/db.py)). One chart component renders both, mirroring the
 same 48-hour cutover to decide whether an axis label is a time or a date.
 
@@ -157,10 +162,20 @@ usage is never touched.
 4. `extract_log_events` walks `resourceLogs → scopeLogs → logRecords`, merges
    resource-level attributes under record-level ones, decodes each OTLP
    `AnyValue`, and yields one `LogEvent` per record.
-5. For each event with a session id, `upsert_session` inserts or refreshes
-   `last_seen_at`; then `insert_event` appends the row to `usage_events`.
+5. `db.write_events` runs the whole batch in **one transaction on one
+   connection**, off the event loop: per-session updates are collapsed first so
+   an out-of-order batch cannot move `last_seen_at` backwards, `_upsert_sessions`
+   creates or refreshes the session rows, and the events are appended with
+   `INSERT OR IGNORE` against a unique `event_hash` so a retried batch adds
+   nothing.
 6. The endpoint returns `{}` with HTTP 200 — the OTLP success response.
 7. Within one poll interval the dashboard's next `/api/*` refetch reflects it.
+
+`POST /v1/metrics` follows the same path with `extract_metric_points` and
+`db.write_metric_points`, walking `resourceMetrics → scopeMetrics → metrics →
+dataPoints` instead. It shares `_upsert_sessions`, so a container that exports
+metrics registers as a live session whether or not it has billed an API call
+yet.
 
 ## Related
 

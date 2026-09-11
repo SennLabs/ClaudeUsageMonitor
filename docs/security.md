@@ -146,15 +146,53 @@ Beyond that:
 ## What is stored
 
 Session, user, and organization identifiers, model names, token counts, costs,
-timestamps, and the complete attribute map of every log record in
-`raw_attributes`.
+timestamps, and the complete attribute map of every record — in
+`usage_events.raw_attributes` for the log stream, and
+`metric_points.raw_attributes` for the metrics stream.
 
-Claude Code does not send prompt or response content by default. It does have
-opt-in settings that add prompt content to telemetry, and this service stores
-whatever attributes arrive — so if a client enables that, the content lands in
-this database and in every backup snapshot. Decide deliberately on the client
-side, and treat the database and its backups as containing exactly what the
-clients chose to send.
+### The client decides what content arrives here
+
+Claude Code sends **no prompt or response content by default**. It has five
+opt-in flags that change that, and because this service stores every attribute
+it receives verbatim, whatever a client turns on lands in `raw_attributes`, in
+`usage.db`, and in every backup snapshot — **none of which is encrypted at
+rest**. This is a policy decision made on the client side that this service
+silently inherits, so it is stated here rather than discovered later.
+
+| Client flag | What it puts into the telemetry stream |
+| --- | --- |
+| `OTEL_LOG_USER_PROMPTS` | The text of what the user typed |
+| `OTEL_LOG_ASSISTANT_RESPONSES` | The text of what Claude replied |
+| `OTEL_LOG_TOOL_DETAILS` | Real agent, skill, plugin and MCP names, instead of the redacted `custom` / `third-party` buckets |
+| `OTEL_LOG_TOOL_CONTENT` | Tool inputs and results — file contents, command output, diffs |
+| `OTEL_LOG_RAW_API_BODIES` | **Full API request and response JSON.** The broadest of the five by a wide margin |
+
+None of these are set by [`examples/claude-settings.json`](../examples/claude-settings.json),
+and nothing in this repository turns them on. Every dashboard view works
+without them; the only one that changes anything visible here is
+`OTEL_LOG_TOOL_DETAILS`, which replaces the redacted buckets on the
+attribution panel with real names.
+
+Before enabling any of them on a container, decide that this database is an
+acceptable place for that content to sit. If one has already been enabled and
+should not have been, the data is already stored:
+`RAW_ATTRIBUTES_RETENTION_DAYS` (see [Configuration](configuration.md)) nulls
+`raw_attributes` on older rows while leaving every aggregate intact, and is the
+fastest way to clear it — but it only reaches rows past the cutoff, and it does
+not reach backups that have already been taken.
+
+### Checking what a client is actually sending
+
+```bash
+# Any attribute beyond the documented set, for the last 20 events.
+sqlite3 usage-data/usage.db \
+  "SELECT occurred_at, raw_attributes FROM usage_events
+    ORDER BY occurred_at DESC LIMIT 20;"
+```
+
+Long values are the signal: prompt text, tool output and raw API bodies are
+orders of magnitude larger than the identifiers and counters that normally
+arrive.
 
 ## Reporting a problem
 

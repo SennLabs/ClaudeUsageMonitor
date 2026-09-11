@@ -1,10 +1,21 @@
-"""Smoke test: posts a sample OTLP/JSON log payload, checks it lands in
-SQLite, and verifies the optional bearer-token auth gate.
+"""
+End-to-end tests for the ingest service.
 
-Run with: python3 test_ingest.py
+Every test drives the real FastAPI app through TestClient against a scratch
+SQLite database, rather than calling db.py directly — the interesting failures
+have historically been in the seams (the OTLP envelope, transaction boundaries,
+the auth dependency, the lifespan), not in a single function.
+
+Run with:
+
+    .venv/bin/python -m pytest            # the whole suite
+    .venv/bin/python -m pytest -k metrics # one area
+    .venv/bin/python -m pytest -x -vv     # stop at the first failure, verbose
+
+DB_PATH is redirected to a scratch directory in conftest.py, which pytest loads
+before it imports this module. See the comment there.
 """
 
-import atexit
 import csv
 import importlib
 import io
@@ -18,19 +29,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-# Point the suite at a scratch database BEFORE importing app.db, which resolves
-# DB_PATH once at import time. Without this the tests delete ingest/usage.db —
-# the same file local development writes to — on every run.
-_TMP_DIR = tempfile.mkdtemp(prefix="claude-usage-tests-")
-os.environ["DB_PATH"] = str(Path(_TMP_DIR) / "test_usage.db")
-atexit.register(shutil.rmtree, _TMP_DIR, True)
+import app.db as db_module
+import app.main as main_module
 
-# Most tests exercise the unauthenticated path, which the app now refuses to
-# start in unless the operator opts in explicitly.
-os.environ["INGEST_ALLOW_ANONYMOUS"] = "1"
-
-import app.db as db_module  # noqa: E402  (must follow the DB_PATH assignment)
-import app.main as main_module  # noqa: E402
+from conftest import SCRATCH_DIR
 
 SAMPLE_PAYLOAD = {
     "resourceLogs": [
@@ -125,7 +127,7 @@ def sessions_of(client) -> list:
 
 def _reset_db() -> None:
     """Drop the scratch database, including the WAL sidecars."""
-    assert db_module.DB_PATH.parent == Path(_TMP_DIR), (
+    assert db_module.DB_PATH.parent == SCRATCH_DIR, (
         f"refusing to delete {db_module.DB_PATH} — tests must run against the scratch DB"
     )
     for suffix in ("", "-wal", "-shm"):
@@ -159,10 +161,6 @@ def test_ingest_without_auth() -> None:
     assert session_row == ("session-abc", "user-123", "org-456"), session_row
     assert event_row == ("session-abc", "claude-opus-4-8", 1200, 340, 800, 0.0231), event_row
 
-    print("OK (no auth) - session and usage_event rows inserted correctly:")
-    print("  session:", session_row)
-    print("  event:  ", event_row)
-
 
 def test_auth_gating() -> None:
     """INGEST_AUTH_TOKEN must gate both /v1/logs and /api/* once set."""
@@ -188,7 +186,6 @@ def test_auth_gating() -> None:
         del os.environ["INGEST_AUTH_TOKEN"]
         importlib.reload(main_module)
 
-    print("OK (auth enabled) - missing/wrong token rejected on both routes, correct token accepted")
 
 
 
@@ -232,7 +229,6 @@ def test_user_project_mapping() -> None:
         assert cleared.status_code == 200, cleared.text
         assert all(s["project_name"] is None for s in sessions_of(client))
 
-    print("OK (user mapping) - retroactive, forward-applying, and clearable")
 
 
 def test_purge_empty_sessions() -> None:
@@ -280,7 +276,6 @@ def test_purge_empty_sessions() -> None:
         conn.close()
         assert orphans == 0, f"{orphans} orphaned events left behind"
 
-    print("OK (purge) - empty inactive session and its events removed, others kept")
 
 
 def test_time_windows() -> None:
@@ -306,7 +301,6 @@ def test_time_windows() -> None:
         by_project = client.get("/api/usage-over-time-by-project?hours=0").json()
         assert len(by_project) == 3, by_project
 
-    print("OK (windows) - 24h excludes 30h-old data, hours=0 returns all time")
 
 
 
@@ -331,7 +325,6 @@ def test_no_cors_headers() -> None:
         )
         assert preflight.status_code in (405, 404), preflight.status_code
 
-    print("OK (cors) - no Access-Control-Allow-Origin, preflight not honoured")
 
 
 def test_docs_endpoints_disabled() -> None:
@@ -340,11 +333,18 @@ def test_docs_endpoints_disabled() -> None:
     with TestClient(main_module.app) as client:
         for path in ("/docs", "/redoc", "/openapi.json"):
             assert client.get(path).status_code == 404, path
-    print("OK (docs) - /docs, /redoc and /openapi.json return 404")
 
 
 def test_refuses_to_start_without_a_token() -> None:
-    """An unset token must fail loudly rather than silently disabling auth."""
+    """
+    An unset token must fail loudly rather than silently disabling auth.
+
+    This reloads app.main, so it must leave a working module behind for
+    whatever runs next — hence the reload in the `finally`. It used to be
+    pinned last in the hand-rolled runner; pytest gives no such ordering, so
+    the restoration has to be unconditional rather than relied on by
+    convention.
+    """
     saved = os.environ.pop("INGEST_ALLOW_ANONYMOUS", None)
     try:
         importlib.reload(main_module)
@@ -357,7 +357,6 @@ def test_refuses_to_start_without_a_token() -> None:
             os.environ["INGEST_ALLOW_ANONYMOUS"] = saved
         importlib.reload(main_module)
 
-    print("OK (startup guard) - refuses to start with no token and no explicit opt-in")
 
 
 
@@ -383,7 +382,6 @@ def test_duplicate_batches_are_ignored() -> None:
         assert client.post("/v1/logs", json=make_payload("retry-2")).status_code == 200
         assert client.get("/api/summary").json()["total_sessions"] == 2
 
-    print("OK (dedupe) - replayed batch stored once, distinct events still stored")
 
 
 def test_malformed_records_do_not_lose_the_batch() -> None:
@@ -409,7 +407,6 @@ def test_malformed_records_do_not_lose_the_batch() -> None:
         ids = {s["session_id"] for s in sessions_of(client)}
         assert {"good-1", "good-2"} <= ids, ids
 
-    print("OK (partial batch) - good records committed, bad one dropped, no 500")
 
 
 def test_malformed_envelope_is_a_400() -> None:
@@ -428,7 +425,6 @@ def test_malformed_envelope_is_a_400() -> None:
             resp = client.post("/v1/logs", json=bad)
             assert resp.status_code == 200, f"{bad!r} -> {resp.status_code} {resp.text}"
 
-    print("OK (envelope) - malformed bodies return 400, null members tolerated")
 
 
 def test_cost_micros_recorded() -> None:
@@ -440,7 +436,6 @@ def test_cost_micros_recorded() -> None:
         micros = conn.execute("SELECT cost_usd_micros FROM usage_events").fetchone()[0]
         conn.close()
         assert micros == 23100, micros
-    print("OK (cost micros) - cost_usd_micros derived exactly from the reported figure")
 
 
 def test_oversized_body_rejected() -> None:
@@ -456,7 +451,6 @@ def test_oversized_body_rejected() -> None:
             },
         )
         assert resp.status_code == 413, resp.status_code
-    print("OK (body cap) - oversized Content-Length rejected with 413")
 
 
 
@@ -480,7 +474,6 @@ def test_project_from_resource_attribute() -> None:
         by_id = {s["session_id"]: s for s in sessions_of(client)}
         assert by_id["rp-1"]["project_name"] == "billing", by_id
 
-    print("OK (resource project) - container-declared project applied and kept current")
 
 
 def test_project_precedence() -> None:
@@ -510,7 +503,6 @@ def test_project_precedence() -> None:
         row = {s["session_id"]: s for s in sessions_of(client)}["pp-2"]
         assert row["project_name"] == "from-container", row
 
-    print("OK (precedence) - manual > resource > user_map, source recorded on each")
 
 
 
@@ -538,7 +530,6 @@ def test_settings_round_trip() -> None:
                     {"defaultMetric": "bananas"}, {"monthlyBudget": -5}):
             assert client.put("/api/settings", json=bad).status_code == 400, bad
 
-    print("OK (settings) - server-side, partial updates merge, invalid values rejected")
 
 
 def test_budget_cycle() -> None:
@@ -564,7 +555,6 @@ def test_budget_cycle() -> None:
         assert cycle["cost_usd"] == 1.5, cycle
         assert cycle["cycle_start"] <= _dt.datetime.now(_dt.timezone.utc).isoformat()
 
-    print("OK (budget) - cycle spend excludes prior periods; all-time total unchanged")
 
 
 
@@ -602,7 +592,6 @@ def test_promoted_attributes_are_queryable() -> None:
         fleet = client.get("/api/fleet").json()
         assert any(f["app_version"] == "2.1.263" for f in fleet), fleet
 
-    print("OK (insights) - promoted attributes drive attribution, latency and fleet views")
 
 
 def test_errors_and_tools_views() -> None:
@@ -634,7 +623,6 @@ def test_errors_and_tools_views() -> None:
         assert tools[0]["tool_name"] == "Bash", tools
         assert tools[0]["failures"] == 1 and tools[0]["max_ms"] == 900, tools
 
-    print("OK (errors/tools) - error rate, retries, refusal categories and tool failures")
 
 
 def test_unattributed_events_are_reported() -> None:
@@ -651,7 +639,6 @@ def test_unattributed_events_are_reported() -> None:
         assert summary["unattributed_events"] == 1, summary
         assert summary["unattributed_cost_usd"] == 9.0, summary
 
-    print("OK (unattributed) - the gap between headline and per-session totals is reported")
 
 
 
@@ -728,7 +715,6 @@ def test_backup_configuration_guards() -> None:
         importlib.reload(backup_module)
         shutil.rmtree(root, ignore_errors=True)
 
-    print("OK (backup config) - bad configs disabled or failed loudly, retention applied")
 
 
 
@@ -763,7 +749,6 @@ def test_retention_and_maintenance() -> None:
     finally:
         _db.RETENTION_DAYS, _db.RAW_ATTRIBUTES_RETENTION_DAYS = saved
 
-    print("OK (retention) - attributes cleared without changing totals, deletion opt-in")
 
 
 def test_sessions_pagination() -> None:
@@ -781,7 +766,6 @@ def test_sessions_pagination() -> None:
         first = {s["session_id"] for s in body["sessions"]}
         assert first.isdisjoint({s["session_id"] for s in page2["sessions"]}), "pages overlap"
 
-    print("OK (pagination) - total reported, offset returns a distinct page")
 
 
 def test_healthz_checks_the_database() -> None:
@@ -791,14 +775,13 @@ def test_healthz_checks_the_database() -> None:
         assert client.get("/healthz").status_code == 200
 
         original = db_module.DB_PATH
-        db_module.DB_PATH = Path(_TMP_DIR) / "no-such-dir" / "missing.db"
+        db_module.DB_PATH = SCRATCH_DIR / "no-such-dir" / "missing.db"
         try:
             assert client.get("/healthz").status_code == 503
         finally:
             db_module.DB_PATH = original
         assert client.get("/healthz").status_code == 200
 
-    print("OK (healthz) - reports 503 when the database is unreachable")
 
 
 
@@ -826,7 +809,6 @@ def test_cache_efficiency_and_prompts() -> None:
         assert prompts[0]["prompt_id"] == "p-1", prompts
         assert prompts[0]["requests"] == 2 and prompts[0]["cost_usd"] == 3.0, prompts
 
-    print("OK (cache/prompts) - hit ratio computed, cost grouped by prompt")
 
 
 def test_audit_view() -> None:
@@ -855,7 +837,6 @@ def test_audit_view() -> None:
         assert audit["auth_failures"][0]["error_category"] == "network", audit
         assert audit["mcp_connections"][0]["status"] == "failed", audit
 
-    print("OK (audit) - bypassPermissions, auth failures and MCP failures reported")
 
 
 def test_csv_export() -> None:
@@ -880,39 +861,416 @@ def test_csv_export() -> None:
         recent = list(csv.DictReader(io.StringIO(client.get(f"/api/export.csv?since={cutoff}").text)))
         assert len(recent) == 1 and recent[0]["session_id"] == "x-1", recent
 
-    print("OK (export) - CSV streamed with headers, ordered, and bounded by since")
 
 
-def main() -> None:
-    print(f"Scratch database: {db_module.DB_PATH}\n")
-    test_ingest_without_auth()
-    test_auth_gating()
-    test_user_project_mapping()
-    test_purge_empty_sessions()
-    test_time_windows()
-    test_duplicate_batches_are_ignored()
-    test_malformed_records_do_not_lose_the_batch()
-    test_malformed_envelope_is_a_400()
-    test_cost_micros_recorded()
-    test_oversized_body_rejected()
-    test_project_from_resource_attribute()
-    test_project_precedence()
-    test_settings_round_trip()
-    test_budget_cycle()
-    test_promoted_attributes_are_queryable()
-    test_errors_and_tools_views()
-    test_unattributed_events_are_reported()
-    test_cache_efficiency_and_prompts()
-    test_audit_view()
-    test_csv_export()
-    test_retention_and_maintenance()
-    test_sessions_pagination()
-    test_healthz_checks_the_database()
-    test_backup_configuration_guards()
-    test_no_cors_headers()
-    test_docs_endpoints_disabled()
-    test_refuses_to_start_without_a_token()  # reloads main_module; keep last
+
+def make_metrics_payload(
+    metric: str,
+    value: float,
+    *,
+    session_id: str = "session-abc",
+    attrs: dict | None = None,
+    age_seconds: float = 0.0,
+    temporality: int = 1,
+    project: str | None = None,
+) -> dict:
+    """Build a minimal OTLP/JSON ExportMetricsServiceRequest for one sum point."""
+    end = time.time() - age_seconds
+    resource_attrs = [{"key": "user.id", "value": {"stringValue": "user-123"}}]
+    if project:
+        resource_attrs.append({"key": "project", "value": {"stringValue": project}})
+    point_attrs = [{"key": "session.id", "value": {"stringValue": session_id}}]
+    for key, val in (attrs or {}).items():
+        point_attrs.append({"key": key, "value": {"stringValue": val}})
+    return {
+        "resourceMetrics": [
+            {
+                "resource": {"attributes": resource_attrs},
+                "scopeMetrics": [
+                    {
+                        "metrics": [
+                            {
+                                "name": metric,
+                                "sum": {
+                                    "aggregationTemporality": temporality,
+                                    "isMonotonic": True,
+                                    "dataPoints": [
+                                        {
+                                            "startTimeUnixNano": str(int((end - 60) * 1e9)),
+                                            "timeUnixNano": str(int(end * 1e9)),
+                                            "asInt": str(int(value)),
+                                            "attributes": point_attrs,
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
 
 
-if __name__ == "__main__":
-    main()
+def test_metrics_ingest_and_productivity_view() -> None:
+    """R24/R25: the metrics stream lands, and the ratios come out of it."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        # $3.00 of spend on the logs stream, to divide by.
+        assert client.post("/v1/logs", json=make_payload("m-1", cost_usd=3.0)).status_code == 200
+
+        posts = [
+            make_metrics_payload("claude_code.commit.count", 2, session_id="m-1"),
+            make_metrics_payload("claude_code.pull_request.count", 1, session_id="m-1"),
+            make_metrics_payload("claude_code.active_time.total", 5400, session_id="m-1",
+                                 attrs={"type": "user"}),
+            make_metrics_payload("claude_code.lines_of_code.count", 400, session_id="m-1",
+                                 attrs={"type": "added"}),
+            make_metrics_payload("claude_code.lines_of_code.count", 100, session_id="m-1",
+                                 attrs={"type": "removed"}),
+            make_metrics_payload("claude_code.session.count", 1, session_id="m-1",
+                                 attrs={"start_type": "fresh"}),
+            make_metrics_payload("claude_code.code_edit_tool.decision", 8, session_id="m-1",
+                                 attrs={"decision": "accept", "language": "python"}),
+            make_metrics_payload("claude_code.code_edit_tool.decision", 2, session_id="m-1",
+                                 attrs={"decision": "reject", "language": "python"}),
+        ]
+        for payload in posts:
+            resp = client.post("/v1/metrics", json=payload)
+            assert resp.status_code == 200, resp.text
+
+        data = client.get("/api/metrics?hours=24").json()
+        assert data["reporting"] is True, data
+        totals = data["totals"]
+        assert totals["commits"] == 2 and totals["pull_requests"] == 1, totals
+        assert totals["lines_added"] == 400 and totals["lines_removed"] == 100, totals
+        assert totals["active_seconds"] == 5400, totals
+
+        derived = data["derived"]
+        assert abs(derived["cost_per_commit"] - 1.5) < 1e-9, derived
+        assert abs(derived["cost_per_active_hour"] - 2.0) < 1e-9, derived   # 1.5h active
+        assert abs(derived["usd_per_1k_lines"] - 6.0) < 1e-9, derived       # 500 lines
+        assert derived["cost_per_pull_request"] == 3.0, derived
+        # Nothing to divide by must read as "unknown", not as $0.00 — the two
+        # are opposite statements and $0.00 per commit looks like a win. The
+        # whole money()/'—' rendering chain depends on this being null.
+        assert derived["lines_per_active_hour"] is not None, derived
+
+        python = next(d for d in data["edit_decisions"] if d["language"] == "python")
+        assert abs(python["acceptance_rate"] - 0.8) < 1e-9, python
+
+        assert [s["name"] for s in data["sessions_by_start_type"]] == ["fresh"], data
+
+
+
+def test_ratios_are_null_not_zero_without_a_denominator() -> None:
+    """
+    "No commits recorded" and "$0.00 per commit" are opposite statements.
+
+    The second one looks like a win, so every ratio must come back null. The
+    money()/'—' rendering chain on the dashboard depends on this.
+    """
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        # Spend, but no metrics at all behind it.
+        client.post("/v1/logs", json=make_payload("n-1", cost_usd=5.0))
+
+        derived = client.get("/api/metrics?hours=24").json()["derived"]
+        assert all(v is None for v in derived.values()), derived
+
+
+def test_ratios_are_scoped_to_metrics_reporting_sessions() -> None:
+    """
+    A partial metrics rollout must not inflate every ratio.
+
+    The counters (commits, lines, active time) exist only for clients with
+    OTEL_METRICS_EXPORTER set, which is optional. Dividing fleet-wide cost by
+    a partial fleet's commits is wrong by the inverse of the rollout — with a
+    fifth of spend reporting metrics, cost-per-commit reads 5x high with
+    nothing on screen to say so.
+    """
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        # One session reports both streams: $2.00 and 2 commits.
+        client.post("/v1/logs", json=make_payload("cov-metrics", cost_usd=2.0))
+        assert client.post(
+            "/v1/metrics",
+            json=make_metrics_payload("claude_code.commit.count", 2, session_id="cov-metrics"),
+        ).status_code == 200
+
+        # Three more sessions spend $6.00 between them and report no metrics.
+        for i, amount in enumerate((1.0, 2.0, 3.0)):
+            client.post("/v1/logs", json=make_payload(f"cov-logs-{i}", cost_usd=amount))
+
+        data = client.get("/api/metrics?hours=24").json()
+
+        assert data["cost_usd_fleet"] == 8.0, data       # everything
+        assert data["cost_usd"] == 2.0, data             # the metrics-reporting subset
+        assert data["metrics_cost_coverage"] == 0.25, data
+        # $2.00 over 2 commits. Against fleet cost this would have read $4.00.
+        assert data["derived"]["cost_per_commit"] == 1.0, data["derived"]
+
+        # And with a full rollout, coverage is 1 and the two agree.
+        assert client.post(
+            "/v1/metrics",
+            json=make_metrics_payload("claude_code.commit.count", 1, session_id="cov-logs-0"),
+        ).status_code == 200
+        data = client.get("/api/metrics?hours=24").json()
+        assert data["cost_usd"] == 3.0, data
+        assert data["metrics_cost_coverage"] == 0.375, data
+
+
+def test_gauges_are_reported_apart_from_cumulative_points() -> None:
+    """
+    A gauge carries no aggregationTemporality, so the delta advice cannot help.
+
+    Counting it as "cumulative" produced a UI message telling the operator to
+    set a client variable that would change nothing.
+    """
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        gauge = {
+            "resourceMetrics": [{
+                "resource": {"attributes": []},
+                "scopeMetrics": [{"metrics": [{
+                    "name": "claude_code.some_gauge",
+                    "gauge": {"dataPoints": [{
+                        "timeUnixNano": str(int(time.time() * 1e9)),
+                        "asInt": "17",
+                        "attributes": [
+                            {"key": "session.id", "value": {"stringValue": "g-1"}},
+                        ],
+                    }]},
+                }]}],
+            }]
+        }
+        assert client.post("/v1/metrics", json=gauge).status_code == 200
+
+        data = client.get("/api/metrics?hours=24").json()
+        assert data["reporting"] is True, data
+        assert data["cumulative_points_ignored"] == 0, data
+        assert data["unsummable_points"] == 1, data
+        # Visible by name, contributing to no total.
+        row = next(m for m in data["by_metric"] if m["metric_name"] == "claude_code.some_gauge")
+        assert row["points"] == 1 and row["total"] == 0, row
+
+
+def test_unsupported_metric_kind_is_counted_as_dropped() -> None:
+    """An OTLP data kind this parser does not read must not vanish silently."""
+    from app.otlp_metrics import extract_metric_points
+
+    payload = {"resourceMetrics": [{"scopeMetrics": [{"metrics": [
+        # `summary` is a valid OTLP kind that this parser does not handle.
+        {"name": "legacy.summary", "summary": {"dataPoints": [{}, {}, {}]}},
+        # A nameless metric carrying several points is several losses, not one.
+        {"sum": {"aggregationTemporality": 1, "dataPoints": [{}, {}]}},
+    ]}]}]}
+
+    points, skipped = extract_metric_points(payload)
+    assert points == [], points
+    assert skipped == 5, skipped
+
+
+def test_metrics_duplicates_and_cumulative() -> None:
+    """A retried export must not double a delta, and cumulative must not be summed."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        payload = make_metrics_payload("claude_code.commit.count", 5, session_id="m-2")
+        assert client.post("/v1/metrics", json=payload).status_code == 200
+        assert client.post("/v1/metrics", json=payload).status_code == 200  # the retry
+
+        data = client.get("/api/metrics?hours=24").json()
+        assert data["totals"]["commits"] == 5, data  # not 10
+        assert data["cumulative_points_ignored"] == 0, data
+
+        # A cumulative point is a running total: summing the series would count
+        # the same work once per export interval.
+        cumulative = make_metrics_payload(
+            "claude_code.commit.count", 99, session_id="m-3", temporality=2
+        )
+        assert client.post("/v1/metrics", json=cumulative).status_code == 200
+        data = client.get("/api/metrics?hours=24").json()
+        assert data["totals"]["commits"] == 5, data
+        assert data["cumulative_points_ignored"] == 1, data
+
+
+def test_cumulative_only_client_still_reports() -> None:
+    """
+    A client stuck on cumulative temporality must not read as "not reporting".
+
+    It contributes to no total, so every figure is zero — but the fix is the
+    temporality preference, not enabling the exporter. Reporting on delta
+    points alone sent the UI to the wrong message.
+    """
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        assert client.post(
+            "/v1/metrics",
+            json=make_metrics_payload(
+                "claude_code.commit.count", 12, session_id="c-1", temporality=2
+            ),
+        ).status_code == 200
+
+        data = client.get("/api/metrics?hours=24").json()
+        assert data["reporting"] is True, data
+        assert data["totals"]["commits"] == 0, data
+        assert data["cumulative_points_ignored"] == 1, data
+
+
+
+def test_metrics_payload_robustness() -> None:
+    """Same contract as the logs path: bad envelope 400s, bad points are dropped."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        assert client.post("/v1/metrics", json={"nope": []}).status_code == 400
+        assert client.post("/v1/metrics", json=[]).status_code == 400
+        assert client.post("/v1/metrics", content=b"{").status_code == 400
+
+        # One usable point, one valued-but-unrecognised metric, and two
+        # genuinely unusable ones (no name; a value-less point).
+        payload = make_metrics_payload("claude_code.commit.count", 3, session_id="m-4")
+        metrics = payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+        metrics.append({"sum": {"aggregationTemporality": 1, "dataPoints": [
+            {"timeUnixNano": str(int(time.time() * 1e9)), "asInt": "7"},
+        ]}})
+        metrics.append({
+            "name": "claude_code.nameless_point",
+            "sum": {"aggregationTemporality": 1, "dataPoints": [{"timeUnixNano": "0"}]},
+        })
+        metrics.append({
+            "name": "claude_code.mystery",
+            "sum": {
+                "aggregationTemporality": 1,
+                "dataPoints": [
+                    {"timeUnixNano": str(int(time.time() * 1e9)), "asInt": "42"},
+                ],
+            },
+        })
+        assert client.post("/v1/metrics", json=payload).status_code == 200
+
+        data = client.get("/api/metrics?hours=24").json()
+        assert data["totals"]["commits"] == 3, data
+        # An unrecognised metric must stay visible — that is what storing
+        # metrics by name rather than against a fixed list buys, and metric
+        # naming has shifted across Claude Code versions before.
+        mystery = next(
+            (m for m in data["by_metric"] if m["metric_name"] == "claude_code.mystery"), None
+        )
+        assert mystery is not None, data["by_metric"]
+        assert mystery["points"] == 1 and mystery["total"] == 42, mystery
+
+
+
+def test_metrics_only_session_is_not_purged() -> None:
+    """Active time and commits arrive with no billable API call behind them."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        assert client.post(
+            "/v1/metrics",
+            json=make_metrics_payload(
+                "claude_code.active_time.total", 120, session_id="m-5",
+                age_seconds=3600, project="pacs",
+            ),
+        ).status_code == 200
+
+        removed = db_module.purge_empty_sessions(minutes=1)
+        assert removed == 0, "a session whose only record is metrics was purged"
+
+        # Resource attributes ride on the metrics stream too, so attribution works.
+        sessions = client.get("/api/sessions").json()["sessions"]
+        row = next(s for s in sessions if s["session_id"] == "m-5")
+        assert row["project_name"] == "pacs", row
+
+
+
+
+def test_display_timezone_buckets_local_days() -> None:
+    """R10: a UTC day boundary is nobody's day boundary in UTC+8."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        # 2h ago and 10h ago. In UTC+8 those can straddle a different midnight
+        # than they do in UTC, which is the whole point — so pick timestamps
+        # that pin it down rather than relying on when the suite happens to run.
+        now = datetime.now(timezone.utc)
+        # 22:00 UTC = 06:00 next day in Perth.
+        late = now.replace(hour=22, minute=0, second=0, microsecond=0)
+        if late > now:
+            late -= timedelta(days=1)
+        age = (now - late).total_seconds()
+        assert client.post(
+            "/v1/logs", json=make_payload("tz-1", age_seconds=age, cost_usd=1.0)
+        ).status_code == 200
+
+        # Default (UTC): the bucket is the UTC day, named with a Z.
+        utc_rows = client.get("/api/usage-over-time?hours=0").json()
+        assert len(utc_rows) == 1, utc_rows
+        utc_bucket = utc_rows[0]["bucket"]
+        assert utc_bucket.endswith("Z"), utc_bucket
+        assert utc_bucket[:10] == late.strftime("%Y-%m-%d"), utc_bucket
+
+        # Switch to Perth: same event, the next local day, and the bucket now
+        # carries a real offset so the label is unambiguous.
+        assert client.put(
+            "/api/settings", json={"displayTimeZone": "Australia/Perth"}
+        ).status_code == 200
+        perth_rows = client.get("/api/usage-over-time?hours=0").json()
+        assert len(perth_rows) == 1, perth_rows
+        perth_bucket = perth_rows[0]["bucket"]
+        assert perth_bucket.endswith("+08:00"), perth_bucket
+        expected = (late + timedelta(hours=8)).strftime("%Y-%m-%d")
+        assert perth_bucket[:10] == expected, (perth_bucket, expected)
+        assert perth_bucket[:10] != utc_bucket[:10], "22:00 UTC should land on the next Perth day"
+
+        # The per-project chart has to agree with the headline one.
+        by_project = client.get("/api/usage-over-time-by-project?hours=0").json()
+        assert by_project[0]["bucket"] == perth_bucket, by_project
+
+        # Totals must not move — only the labelling does.
+        assert abs(sum(r["cost_usd"] for r in perth_rows)
+                   - sum(r["cost_usd"] for r in utc_rows)) < 1e-9
+
+        # A zone that does not exist is rejected, not silently stored.
+        bad = client.put("/api/settings", json={"displayTimeZone": "Mars/Olympus"})
+        assert bad.status_code == 400, bad.text
+        assert client.get("/api/settings").json()["displayTimeZone"] == "Australia/Perth"
+
+
+
+def test_budget_cycle_uses_the_display_timezone() -> None:
+    """The budget period starts at local midnight, not eight hours late."""
+    _reset_db()
+    with TestClient(main_module.app) as client:
+        client.post("/v1/logs", json=make_payload("tz-2", cost_usd=1.0))
+
+        # `now` is pinned. Reading the wall clock here failed for eight hours
+        # at every month boundary: between 16:00 UTC on the last day and
+        # midnight UTC, Perth is already in the next month, so the two calls
+        # return starts a month apart rather than eight hours.
+        mid_month = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+        utc_start = db_module.cycle_start(1, now=mid_month, tz="UTC")
+        perth_start = db_module.cycle_start(1, now=mid_month, tz="Australia/Perth")
+        # Local midnight on the 1st in UTC+8 is 16:00 on the last day of the
+        # previous month in UTC — earlier, so the first eight hours of the
+        # month stop being counted against the wrong period.
+        assert perth_start < utc_start, (perth_start, utc_start)
+        assert (utc_start - perth_start) == timedelta(hours=8), (utc_start, perth_start)
+
+        # And the same during the window that used to break the assertions.
+        edge = datetime(2026, 8, 31, 18, 0, tzinfo=timezone.utc)  # 02:00, 1 Sep in Perth
+        assert db_module.cycle_start(1, now=edge, tz="Australia/Perth") == datetime(
+            2026, 8, 31, 16, 0, tzinfo=timezone.utc
+        )
+
+        assert client.put(
+            "/api/settings", json={"displayTimeZone": "Australia/Perth"}
+        ).status_code == 200
+        budget = client.get("/api/budget").json()
+        assert budget["cycle_start"] == db_module.cycle_start(
+            1, tz="Australia/Perth"
+        ).isoformat(), budget
+
+        # A non-string zone is a 400, not an AttributeError escaping as a 500.
+        for bad in (5, ["UTC"], {"tz": "UTC"}):
+            resp = client.put("/api/settings", json={"displayTimeZone": bad})
+            assert resp.status_code == 400, (bad, resp.status_code, resp.text)
+

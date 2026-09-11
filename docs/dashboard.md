@@ -45,11 +45,15 @@ In project mode each project gets its own colored line, with `(untagged)`
 covering sessions nobody has labelled. Hovering shows a tooltip with the bucket
 timestamp and value.
 
-X-axis labels follow the bucket granularity: a clock time (`14:00`, in local
-time) for hourly buckets, a date (`10 Sep`, in UTC, since daily buckets *are*
-UTC days) for daily ones. The all-time view adds a two-digit year when the data
-spans more than one, and stops drawing per-point dots past 60 buckets so a long
-history stays legible.
+X-axis labels follow the bucket granularity: a clock time (`14:00`) for hourly
+buckets, a date (`10 Sep`) for daily ones. Both are read straight off the bucket
+string the server returns, which is already named in the configured **display
+time zone** — so a daily bucket is a local day, and the label matches the bucket
+regardless of where the browser is. (Parsing it into a `Date` and re-formatting
+would apply the browser's own zone a second time and shift the label off its own
+bucket.) The all-time view adds a two-digit year when the data spans more than
+one, and stops drawing per-point dots past 60 buckets so a long history stays
+legible.
 
 Since empty buckets produce no rows, a quiet period is a gap in the series
 rather than a run of zeroes.
@@ -138,6 +142,7 @@ became columns. Same time-window control as the main chart.
 | **Most expensive prompts** | What a single user question cost, grouped by `prompt.id` |
 | **Audit** | Permission-mode changes (with a banner for `bypassPermissions`), failed logins, MCP connectivity |
 | **Fleet** | Which Claude Code versions and terminals are reporting, and when each was last seen |
+| **Productivity** | Cost per commit, per pull request and per active hour; dollars per thousand lines; edit acceptance rate by language. From the [metrics stream](client-setup.md#optional-the-metrics-stream), not the event stream — the panel says so when no client has it enabled. |
 
 There is also an **Export CSV** button in the header, which downloads every
 event joined to its project — the answer to being asked to justify the spend.
@@ -203,8 +208,12 @@ unused session is deleted.
 **Budget** — monthly budget amount and the day of month it resets (1–28; capped
 at 28 so every month has that day).
 
-**Charts** — default time window (including **All time**) and default metric for
-a fresh page load.
+**Charts** — default time window (including **All time**), default metric for a
+fresh page load, and the **display time zone**. The zone decides where a chart
+day starts and where the budget period starts; everything is still stored in
+UTC, so changing it relabels the buckets and moves no data. The list comes from
+the browser's own IANA database and is validated again on the server, which
+rejects an unknown name rather than storing it.
 
 **Alerts** — hourly spend threshold that triggers the amber banner. Blank
 disables it.

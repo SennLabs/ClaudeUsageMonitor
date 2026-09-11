@@ -1,10 +1,14 @@
 # Roadmap — ideas and enhancements
 
-Proposed work, none of it started. Separate from
-[Known issues](known-issues.md), which tracks defects in what already exists.
+Proposed work. Separate from [Known issues](known-issues.md), which tracks
+defects in what already exists. Items marked *done* keep their original
+statement of the problem below the note, so the reasoning stays readable.
 
 Each item states the problem first. If the problem doesn't bite you, skip the
 item — this is a list of options, not a plan of record.
+
+**Outstanding as of 2026-09-11:** R2 (daily rollups — retention is done), R5,
+R6, R7, R9 (largely superseded by R24), R11, R12.
 
 ---
 
@@ -28,10 +32,10 @@ item — this is a list of options, not a plan of record.
 - [x] [R21. Cost attribution by agent, skill and MCP server](#r21-cost-attribution-by-agent-skill-and-mcp-server) — *done*
 - [x] [R22. Per-prompt cost](#r22-per-prompt-cost) — *done*
 - [x] [R23. Fleet visibility](#r23-fleet-visibility) — *done*
-- [ ] [R24. Ingest the metrics stream](#r24-ingest-the-metrics-stream)
-- [ ] [R25. Derived productivity metrics](#r25-derived-productivity-metrics)
+- [x] [R24. Ingest the metrics stream](#r24-ingest-the-metrics-stream) — *done*
+- [x] [R25. Derived productivity metrics](#r25-derived-productivity-metrics) — *done*
 - [x] [R26. Security and audit view](#r26-security-and-audit-view) — *done*
-- [ ] [R27. Document the client-side content flags](#r27-document-the-client-side-content-flags)
+- [x] [R27. Document the client-side content flags](#r27-document-the-client-side-content-flags) — *done*
 
 **Worth considering**
 
@@ -39,17 +43,17 @@ item — this is a list of options, not a plan of record.
 - [ ] [R6. Per-client tokens](#r6-per-client-tokens)
 - [ ] [R7. Scheduled digest](#r7-scheduled-digest)
 - [x] [R8. CSV / JSON export](#r8-csv--json-export) — *done*
-- [ ] [R9. Session lifecycle and duration](#r9-session-lifecycle-and-duration)
-- [ ] [R10. Display timezone setting](#r10-display-timezone-setting)
+- [ ] [R9. Session lifecycle and duration](#r9-session-lifecycle-and-duration) — *largely superseded by R24*
+- [x] [R10. Display timezone setting](#r10-display-timezone-setting) — *done*
 
 **Project hygiene**
 
 - [ ] [R11. Continuous integration](#r11-continuous-integration)
 - [ ] [R12. Pin dependencies and base images](#r12-pin-dependencies-and-base-images)
-- [ ] [R13. Turn on TypeScript strict mode, and add frontend tests](#r13-turn-on-typescript-strict-mode-and-add-frontend-tests) — *partial*
-- [ ] [R14. Adopt pytest, and stop the tests eating the dev database](#r14-adopt-pytest-and-stop-the-tests-eating-the-dev-database)
+- [x] [R13. Turn on TypeScript strict mode, and add frontend tests](#r13-turn-on-typescript-strict-mode-and-add-frontend-tests) — *done*
+- [x] [R14. Adopt pytest, and stop the tests eating the dev database](#r14-adopt-pytest-and-stop-the-tests-eating-the-dev-database) — *done*
 - [x] [R15. Ship an example client configuration](#r15-ship-an-example-client-configuration) — *done*
-- [ ] [R16. Add a LICENSE](#r16-add-a-license)
+- [x] [R16. Add a LICENSE](#r16-add-a-license) — *done*
 
 ---
 
@@ -132,6 +136,13 @@ cost`) written by a nightly job; time-series endpoints read rollups for anything
 older than a few days and raw events for the recent window. Plus a retention
 sweep that drops or truncates `raw_attributes` on events older than N days —
 that alone reclaims most of the space while keeping the numbers.
+
+**Note since [R10](#r10-display-timezone-setting):** a daily rollup is now
+timezone-dependent. Rolling up by UTC day and then relabelling in
+`Australia/Perth` would put eight hours of each day in the wrong bucket, so the
+rollup has to be keyed on the display zone and rebuilt if that setting changes
+— or keyed hourly and summed into local days at read time, which is the safer
+shape. Decide that before writing the job.
 
 **Effort.** Moderate. Pairs naturally with the existing `_purge_loop`.
 
@@ -282,6 +293,30 @@ across versions, which is why `_ATTR_ALIASES` carries aliases at all.
 
 ### R24. Ingest the metrics stream
 
+*Status: **done**.*
+
+**Done 2026-09-11.** `POST /v1/metrics` parses `ExportMetricsServiceRequest`
+(`app/otlp_metrics.py`) into a new `metric_points` table, with the same
+guarantees as the logs path: one transaction per batch, a malformed envelope is
+a 400, individual unusable points are dropped and counted, and retries are
+de-duplicated on a `point_hash` behind a unique index. Sum, gauge and histogram
+points are all accepted. Only DELTA points are summed — cumulative points are
+stored, excluded, and reported as `cumulative_points_ignored` so a
+misconfigured client is visible. A metric point with a `session.id` upserts the
+session (sharing `_upsert_sessions` with the logs path), so a container that
+exports metrics registers as a live session and survives the empty-session
+purge. Unrecognised metric names still land and appear in `by_metric`. The
+`reporting` flag counts points of *any* temporality on purpose, so a client
+stuck on cumulative reads as "reporting, every total zero, N cumulative points
+excluded" rather than as "no metrics received" — the second points at the wrong
+fix.
+`examples/claude-settings.json` and
+[Client setup](client-setup.md#optional-the-metrics-stream) carry the three
+client lines, including the explicit `delta` temporality preference.
+
+The trap this item warned about is now closed: `POST /v1/metrics` exists, so
+enabling `OTEL_METRICS_EXPORTER=otlp` no longer 404s on every export interval.
+
 Claude Code emits eight pre-aggregated metrics that this tool receives none of,
 because only `OTEL_LOGS_EXPORTER` is enabled:
 
@@ -307,6 +342,30 @@ from the logs stream, so the ingest path is not a copy of `/v1/logs`.
 
 ### R25. Derived productivity metrics
 
+*Status: **done**.*
+
+**Done 2026-09-11, alongside R24.** `GET /api/metrics` returns cost per commit,
+cost per pull request, cost per active hour, dollars per thousand lines, lines
+per active hour, and edit acceptance rate by language; all of it is on the
+Productivity panel on `/insights`. Every ratio is **`null`, not `0`, when its
+denominator is zero** — "no commits recorded" and "$0.00 per commit" are
+opposite statements and the second one looks like a win.
+
+**The numerator is scoped to metrics-reporting sessions**, which turned out to
+matter more than the ratios themselves. The counters exist only for clients
+with `OTEL_METRICS_EXPORTER` set, and that is optional — so dividing
+fleet-wide cost by a partial fleet's commits is wrong by the inverse of the
+rollout, not slightly off: with 2 of 10 developers exporting metrics,
+cost-per-commit read 5× high with nothing on screen to say so. `/api/metrics`
+now returns `cost_usd` (scoped), `cost_usd_fleet` (everything) and
+`metrics_cost_coverage`, and the panel states the coverage above the figures
+whenever it is below 100%.
+
+That also fixed the cost cross-check, which compared a fleet-wide figure
+against a metrics-only one and would have shown "one of the two is losing
+exports" permanently on any partial rollout. Both sides now cover the same
+sessions, so a gap above 2% really is a dropped or duplicated export.
+
 Once R24 lands, the numbers worth putting on the dashboard are ratios, not
 totals: cost per commit, cost per PR, cost per active hour, dollars per thousand
 lines, and edit acceptance rate by language. Raw spend says how much was spent;
@@ -330,6 +389,17 @@ Three event types are already arriving and have nothing to do with cost:
   `server_scope`, `duration_ms`, `error_code`; MCP server reliability.
 
 ### R27. Document the client-side content flags
+
+*Status: **done**.*
+
+**Done 2026-09-11.** [Security → What is stored](security.md#what-is-stored)
+now names all five flags in a table with what each one puts into the stream,
+states plainly that nothing here is encrypted at rest, points out that the
+repo's own example config sets none of them, gives a `sqlite3` one-liner for
+checking what a client is actually sending, and says what to do if one was
+enabled by mistake (`RAW_ATTRIBUTES_RETENTION_DAYS`, and its limits).
+[Client setup](client-setup.md#what-gets-sent) links to it instead of
+paraphrasing.
 
 Claude Code has opt-in flags that put content into the telemetry stream:
 `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_DETAILS`,
@@ -415,6 +485,13 @@ it lands.
 
 ### R9. Session lifecycle and duration
 
+*Status: **largely superseded** by [R24](#r24-ingest-the-metrics-stream), now
+done.* `claude_code.active_time.total` is being ingested and gives measured
+active time directly, and `cost per active hour` is on the Productivity panel —
+which was the number this item actually wanted. What remains unbuilt is
+`sessions.end_reason`, still never written, and `start_type` beyond the counts
+already shown. Judge the remainder on that alone.
+
 **Problem.** `sessions.end_reason` exists in the schema and is never written.
 There is no notion of how long a session ran, only when it was first and last
 seen — and the empty-session purge can reset `first_seen_at` on a session that
@@ -432,6 +509,28 @@ empty-session purge can distort anyway.
 
 ### R10. Display timezone setting
 
+*Status: **done**.*
+
+**Done 2026-09-11.** `displayTimeZone` (an IANA name, default `UTC`, validated
+with `zoneinfo` on save) is applied at bucketing time by `_bucket_sql()`.
+UTC keeps the pure-SQL `strftime` path, so the default is byte-identical to
+before; any other zone registers a per-row Python function on the connection,
+because a fixed offset added to the SQL would be wrong across a DST boundary.
+Bucket strings therefore carry a real offset (`...+08:00`) rather than always
+ending in `Z`.
+
+The note below about the chart's label logic was correct and was the harder
+half. Those functions now read the label straight off the bucket string
+(`parts()` in the new `dashboard/src/chart.ts`) instead of going through
+`new Date`, which was re-applying the *browser's* zone on top and had already
+been mixing `getHours()` with `getUTCDate()`. `chart.test.ts` pins the
+behaviour.
+
+The budget cycle got the same treatment: it now starts at local midnight on the
+cycle day. In UTC+8 it had been starting eight hours late, so the first eight
+hours of every period counted against the previous one. `tzdata` is pinned in
+`requirements.txt`, since a slim base image may carry no system zone database.
+
 **Problem.** Everything is stored and bucketed in UTC. Daily buckets are UTC
 days, so in UTC+8 a "day" on the chart runs 08:00 to 08:00 local. The axis
 labels are correct but the day boundaries will not match anyone's intuition.
@@ -447,13 +546,24 @@ logic currently assumes they are not.
 
 ### R11. Continuous integration
 
-There is no CI. A GitHub Actions job running `test_ingest.py` and
+There is no CI. A GitHub Actions job running `pytest`, `npm test` and
 `tsc -b && vite build` on every push would have caught several items in
 [Known issues](known-issues.md) before they landed.
 
 **Deferred by decision (2026-09-10).** No GitHub Actions for now. Until this
-lands, both commands are run by hand before any change set is considered done —
-that is the only guard against regressions, so it is not optional.
+lands, these are run by hand before any change set is considered done — the
+only guard against regressions, so not optional:
+
+```bash
+cd ingest    && .venv/bin/python -m pytest   # 33 tests
+cd dashboard && npm test                     # 25 tests
+cd dashboard && npm run build                # tsc -b && vite build
+```
+
+Both suites are now pytest/Vitest rather than hand-rolled runners
+([R14](#r14-adopt-pytest-and-stop-the-tests-eating-the-dev-database),
+[R13](#r13-turn-on-typescript-strict-mode-and-add-frontend-tests)), so wiring
+them into a workflow is three lines if this is ever revisited.
 
 ### R12. Pin dependencies and base images
 
@@ -464,9 +574,25 @@ images by digest. See [known issue 21](known-issues.md#21-container-and-deployme
 
 ### R13. Turn on TypeScript strict mode, and add frontend tests
 
-*Status: **partial**.*
+*Status: **done**.*
 
-**Strict mode done 2026-09-10** — zero errors on a forced rebuild. Frontend tests are still absent.
+**Strict mode done 2026-09-10** — zero errors on a forced rebuild.
+**Frontend tests done 2026-09-11.** Vitest, 25 tests over the pure logic most
+likely to break silently: bucket label parsing, `niceMax`'s axis rounding, and
+the token/cost abbreviation thresholds. They run in the `node` environment (no
+jsdom, no Solid plugin) because everything under test is a pure function —
+`dashboard/src/chart.ts` was extracted from `UsageChart.tsx` precisely so that
+logic could be imported without mounting a component. `npm test` / `npm run
+test:watch`.
+
+`computeHourlyRate` is no longer in the list because it no longer exists —
+[known issue 14](known-issues.md#14-computehourlyrate-is-a-sawtooth-not-a-rate)
+replaced it with the server-side `/api/rate`.
+
+**Writing the tests found a real bug**, which was the point of writing them:
+`niceMax` applied its multiple-of-4 rounding to sub-unit values, so a chart
+whose highest bucket was $0.04 got a $4.00 axis and drew the line flat along
+the bottom at 1% height. The integer rule now applies only to values ≥ 1.
 
 `strict` is off ([known issue 29](known-issues.md#29-typescript-strict-is-off)).
 Turning it on will surface real null-handling gaps, particularly around the
@@ -478,10 +604,20 @@ cover the parts most likely to break silently.
 
 ### R14. Adopt pytest, and stop the tests eating the dev database
 
-`test_ingest.py` is a hand-rolled runner with a `main()`. Moving to pytest costs
-little and makes CI reporting standard. Do it together with
-[known issue 23](known-issues.md#23-test_ingestpy-deletes-the-development-database)
-so the tests stop deleting `ingest/usage.db`.
+*Status: **done**.*
+
+**Done 2026-09-11.** The hand-rolled `main()` runner is gone; 33 tests are
+discovered by pytest (`pytest.ini` sets `pythonpath`, `testpaths` and `-q`).
+The `DB_PATH` redirection moved to `conftest.py`, which is the only file pytest
+is guaranteed to load before it imports a test module — that is what makes the
+protection reliable rather than dependent on statement order inside the test
+file, and `_reset_db()` still asserts it is pointed at the scratch directory
+before unlinking anything.
+
+The one ordering dependency went with it: `test_refuses_to_start_without_a_token`
+was pinned last by a comment in the old runner. It already restored
+`app.main` in a `finally`, so it is now order-independent and verified as such.
+`pytest==9.1.1` is pinned in `requirements-dev.txt`.
 
 ### R15. Ship an example client configuration
 
@@ -496,8 +632,10 @@ warning about never committing a real token to a project-level file.
 
 ### R16. Add a LICENSE
 
-There isn't one. Even for an internal tool it settles the question of what
-colleagues may do with it.
+*Status: **done**.*
+
+**Done 2026-09-11.** [MIT](../LICENSE), chosen by the maintainer, with a
+pointer from the README.
 
 ---
 

@@ -67,8 +67,8 @@ Two terminals.
 ```bash
 cd ingest
 python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt   # dev adds httpx, needed by the smoke test
-.venv/bin/python test_ingest.py                 # optional but fast; prints an OK line per test
+.venv/bin/pip install -r requirements-dev.txt   # dev adds httpx and pytest
+.venv/bin/python -m pytest                      # optional but fast; ~2s
 INGEST_ALLOW_ANONYMOUS=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 

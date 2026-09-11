@@ -69,3 +69,42 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_time ON usage_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 -- Every non-cost view filters by event type first.
 CREATE INDEX IF NOT EXISTS idx_usage_events_name ON usage_events(event_name);
+
+-- Claude Code's pre-aggregated metrics stream (OTEL_METRICS_EXPORTER=otlp),
+-- received on POST /v1/metrics. Kept in its own table rather than folded into
+-- usage_events: these are periodic aggregates over a time window, not records
+-- of a single API call, and they arrive on a different interval (60s vs 5s).
+CREATE TABLE IF NOT EXISTS metric_points (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    metric_name     TEXT NOT NULL,
+    occurred_at     TEXT NOT NULL,   -- end of the point's window
+    started_at      TEXT,            -- start of the point's window
+    value           REAL NOT NULL,
+    -- delta | cumulative | unspecified. Claude Code exports delta, where each
+    -- point is an increment and SUM() is correct. A cumulative point is a
+    -- running total, so summing them counts the same work once per export
+    -- interval — every read here filters to delta and reports the rest.
+    temporality     TEXT,
+    is_monotonic    INTEGER,
+    session_id      TEXT,
+    user_id         TEXT,
+    organization_id TEXT,
+    project_name    TEXT,
+    app_version     TEXT,
+    terminal_type   TEXT,
+    model           TEXT,
+    type            TEXT,            -- added|removed, user|cli, input|output|...
+    tool_name       TEXT,
+    decision        TEXT,            -- accept | reject
+    source          TEXT,
+    language        TEXT,
+    start_type      TEXT,            -- fresh | resume | continue
+    raw_attributes  TEXT,
+    -- Same reasoning as usage_events.event_hash: the exporter resends an
+    -- identical payload after a 5xx, and a re-counted delta is a permanently
+    -- wrong total. The UNIQUE index is created from init_db().
+    point_hash      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_metric_points_name_time ON metric_points(metric_name, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_metric_points_session ON metric_points(session_id);
