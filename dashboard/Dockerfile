@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# vite.config.ts reads ../VERSION, i.e. /VERSION here. From the repo root via
+# additional_contexts in docker-compose.yml.
+COPY --from=repo VERSION /VERSION
 RUN npm run build
 
 # --- serve stage ---
@@ -19,5 +22,7 @@ EXPOSE 80
 # Checks the proxy path, not just the static files. Fetching / only proved
 # nginx was up: with ingest down or the token mismatched, every /api/ call
 # 401s or 502s while the container still reported healthy.
+# 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 and nginx
+# listens on IPv4 only, so the check was refused and never went healthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget --spider -q http://localhost/api/summary || exit 1
+    CMD wget --spider -q http://127.0.0.1/api/summary || exit 1

@@ -140,7 +140,7 @@ export default function InsightsPage() {
   return (
     <div class="min-h-screen">
       <header class="border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+        <div class="mx-auto flex max-w-[120rem] items-center justify-between px-6 py-4">
           <div class="flex items-center gap-3">
             <a
               href="/"
@@ -181,7 +181,7 @@ export default function InsightsPage() {
         </div>
       </header>
 
-      <main class="mx-auto max-w-6xl space-y-6 px-6 py-8">
+      <main class="mx-auto max-w-[120rem] space-y-6 px-6 py-8">
         <p class="text-sm text-slate-500 dark:text-slate-400">
           Everything here comes from telemetry Claude Code has always sent and this service has
           always stored — it just wasn't queryable until the attributes were promoted out of{' '}

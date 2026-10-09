@@ -86,6 +86,15 @@ Compose recreates only what changed. The database is a bind mount, so it is
 untouched; `init_db()` applies any new schema on startup. Take a backup first
 if the release notes mention a schema change.
 
+The running version shows next to the title on the dashboard; the API reports
+it at `/healthz` and `/api/version`. Both images read it from the repo-root
+`VERSION` file at build time, so after an upgrade the badge confirms which
+release is live. If it reads `v0.x.y (ingest v0.x.z)`, one container was not
+rebuilt — run the `up --build` again.
+
+Releases follow semantic versioning. To cut one, bump `VERSION`, commit, and
+tag the commit `v<version>`.
+
 Roll back by checking out the previous commit and rebuilding. If a release
 added a column, rolling back the code leaves the extra column in place —
 harmless, since every query names its columns explicitly.

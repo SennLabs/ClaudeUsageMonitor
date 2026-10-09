@@ -247,6 +247,7 @@ async function getJSON<T>(path: string): Promise<T> {
 }
 
 export const fetchSummary = () => getJSON<Summary>('/summary')
+export const fetchVersion = () => getJSON<{ version: string }>('/version')
 export interface SessionPage {
   total: number
   limit: number

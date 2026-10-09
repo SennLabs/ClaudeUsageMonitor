@@ -1,6 +1,11 @@
 services:
   ingest:
-    build: ./ingest
+    build:
+      context: ./ingest
+      # Exposes the repo-root VERSION file to the build without widening the
+      # build context to the whole repo.
+      additional_contexts:
+        repo: .
     ports:
       # Published on every interface. Docker's rules sit ahead of the INPUT
       # chain, so `ufw deny 9585` does NOT block this — bind an explicit
@@ -45,7 +50,12 @@ services:
     restart: unless-stopped
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      # Exposes the repo-root VERSION file to the build without widening the
+      # build context to the whole repo.
+      additional_contexts:
+        repo: .
     ports:
       - "9595:80"
     environment:

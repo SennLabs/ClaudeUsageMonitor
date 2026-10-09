@@ -75,7 +75,7 @@ export default function UsersPage() {
   return (
     <div class="min-h-screen">
       <header class="border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+        <div class="mx-auto flex max-w-[120rem] items-center justify-between px-6 py-4">
           <div class="flex items-center gap-3">
             <a
               href="/"
@@ -89,7 +89,7 @@ export default function UsersPage() {
         </div>
       </header>
 
-      <main class="mx-auto max-w-6xl space-y-6 px-6 py-8">
+      <main class="mx-auto max-w-[120rem] space-y-6 px-6 py-8">
         <div class="rounded-xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950">
           <h2 class="text-base font-semibold text-amber-900 dark:text-amber-200">
             Prefer declaring the project on the container

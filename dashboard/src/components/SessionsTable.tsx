@@ -11,6 +11,19 @@ function isActive(lastSeenAt: string): boolean {
   return Date.now() - new Date(lastSeenAt).getTime() < settings().activeSessionWindowMin * 60_000
 }
 
+function splitModels(models: string | null): string[] {
+  return (models ?? '').split(',').map((m) => m.trim()).filter(Boolean)
+}
+
+/** One model per line; nowrap so the column is at least as wide as the longest name. */
+function ModelList(props: { models: string[] }) {
+  return (
+    <Show when={props.models.length > 0} fallback="—">
+      <For each={props.models}>{(m) => <div class="whitespace-nowrap">{m}</div>}</For>
+    </Show>
+  )
+}
+
 // ── Grouped-by-project aggregation ────────────────────────────────────────
 
 interface ProjectGroup {
@@ -46,11 +59,8 @@ function buildProjectGroups(sessions: SessionRow[]): ProjectGroup[] {
     g.input_tokens += s.input_tokens
     g.output_tokens += s.output_tokens
     g.cost_usd += s.cost_usd
-    if (s.models) {
-      for (const m of s.models.split(',')) {
-        const t = m.trim()
-        if (t && !g.models.includes(t)) g.models.push(t)
-      }
+    for (const m of splitModels(s.models)) {
+      if (!g.models.includes(m)) g.models.push(m)
     }
     if (s.last_seen_at > g.last_seen_at) g.last_seen_at = s.last_seen_at
   }
@@ -108,7 +118,7 @@ function GroupedTable(props: { sessions: SessionRow[] }) {
                   </Show>
                 </td>
                 <td class="px-4 py-2 text-slate-700 dark:text-slate-300 text-xs">
-                  {g.models.join(', ') || '—'}
+                  <ModelList models={g.models} />
                 </td>
                 <td class="px-4 py-2 text-right text-slate-700 dark:text-slate-300">
                   {formatNumber(g.input_tokens)}
@@ -212,10 +222,13 @@ export default function SessionsTable(props: {
       <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
         <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
           <thead class="bg-slate-50 dark:bg-slate-900">
-            <tr>
+            <tr class="whitespace-nowrap">
               <th class="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Session</th>
               <th class="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Project</th>
-              <th class="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">User</th>
+              {/* Takes whatever width is left over. User IDs are mostly random
+                  hashes from devcontainers, so they truncate rather than
+                  stretching or wrapping the table. */}
+              <th class="w-full min-w-32 px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">User</th>
               <th class="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Model(s)</th>
               <th class="px-4 py-2 text-right font-medium text-slate-500 dark:text-slate-400">Input</th>
               <th class="px-4 py-2 text-right font-medium text-slate-500 dark:text-slate-400">Output</th>
@@ -230,8 +243,11 @@ export default function SessionsTable(props: {
                 const isEditing = () => editingId() === session.session_id
 
                 return (
-                  <tr>
-                    <td class="px-4 py-2 font-mono text-xs text-slate-700 dark:text-slate-300">
+                  <tr class="whitespace-nowrap">
+                    <td
+                      class="px-4 py-2 font-mono text-xs whitespace-nowrap text-slate-700 dark:text-slate-300"
+                      title={session.session_id}
+                    >
                       <span
                         class="mr-2 inline-block h-2 w-2 rounded-full"
                         classList={{
@@ -239,7 +255,7 @@ export default function SessionsTable(props: {
                           'bg-slate-400 dark:bg-slate-600': !isActive(session.last_seen_at),
                         }}
                       />
-                      {session.session_id.slice(0, 12)}
+                      {session.session_id.slice(0, 12)}…
                     </td>
                     <td class="px-4 py-2">
                       <Show
@@ -279,8 +295,14 @@ export default function SessionsTable(props: {
                         />
                       </Show>
                     </td>
-                    <td class="px-4 py-2 text-slate-700 dark:text-slate-300">{session.user_id ?? '—'}</td>
-                    <td class="px-4 py-2 text-slate-700 dark:text-slate-300">{session.models ?? '—'}</td>
+                    <td class="max-w-0 min-w-32 px-4 py-2 text-slate-700 dark:text-slate-300">
+                      <div class="truncate" title={session.user_id ?? undefined}>
+                        {session.user_id ?? '—'}
+                      </div>
+                    </td>
+                    <td class="px-4 py-2 text-slate-700 dark:text-slate-300">
+                      <ModelList models={splitModels(session.models)} />
+                    </td>
                     <td class="px-4 py-2 text-right text-slate-700 dark:text-slate-300">
                       {formatNumber(session.input_tokens)}
                     </td>

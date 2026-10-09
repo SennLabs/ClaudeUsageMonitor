@@ -12,6 +12,7 @@ import ModelBreakdown from './components/ModelBreakdown'
 import SessionsTable from './components/SessionsTable'
 import SummaryCards from './components/SummaryCards'
 import ThemeToggle from './components/ThemeToggle'
+import VersionTag from './components/VersionTag'
 import UsageChart, { type Metric } from './components/UsageChart'
 import { errorMessage, firstError, latest } from './resource'
 import { WINDOW_HOURS, WINDOW_OPTIONS } from './settings'
@@ -104,8 +105,11 @@ export default function App() {
   return (
     <div class="min-h-screen">
       <header class="border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <h1 class="text-lg font-semibold text-slate-900 dark:text-slate-50">Claude Usage Monitor</h1>
+        <div class="mx-auto flex max-w-[120rem] items-center justify-between px-6 py-4">
+          <h1 class="flex items-center gap-2 text-lg font-semibold text-slate-900 dark:text-slate-50">
+            Claude Usage Monitor
+            <VersionTag />
+          </h1>
           <div class="flex items-center gap-3">
             <a
               href="/insights"
@@ -138,14 +142,14 @@ export default function App() {
 
       <Show when={alertActive()}>
         <div class="border-b border-amber-200 bg-amber-50 px-6 py-2.5 dark:border-amber-800 dark:bg-amber-950">
-          <p class="mx-auto max-w-6xl text-sm font-medium text-amber-800 dark:text-amber-300">
+          <p class="mx-auto max-w-[120rem] text-sm font-medium text-amber-800 dark:text-amber-300">
             ⚠ Hourly spend rate (${costRatePerHour().toFixed(2)}) has exceeded your alert threshold
             (${settings().costAlertThresholdPerHour!.toFixed(2)}/hr)
           </p>
         </div>
       </Show>
 
-      <main class="mx-auto max-w-6xl space-y-8 px-6 py-8">
+      <main class="mx-auto max-w-[120rem] space-y-8 px-6 py-8">
         <section>
           <SummaryCards summary={latest(summary)} />
           <Show when={(latest(summary)?.unattributed_events ?? 0) > 0}>

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from . import backup, db
 from .otlp import extract_log_events
 from .otlp_metrics import extract_metric_points
+from .version import __version__
 
 # uvicorn configures handlers for its own loggers but leaves the root logger
 # alone, so without this every log.info() in this package is dropped — the
@@ -109,6 +110,7 @@ async def _maintenance_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log.info("Claude Usage Monitor ingest %s starting", __version__)
     if not AUTH_TOKEN:
         log.warning(
             "AUTHENTICATION DISABLED — INGEST_ALLOW_ANONYMOUS is set and no token "
@@ -131,6 +133,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Claude Usage Monitor - Ingest",
+    version=__version__,
     lifespan=lifespan,
     # The interactive docs are unauthenticated by default and this port has to
     # be reachable from every reporting dev container. Nothing needs them in
@@ -250,7 +253,12 @@ async def healthz():
     except Exception as exc:
         log.error("Health check failed: %s", exc)
         raise HTTPException(status_code=503, detail=f"database unavailable: {exc}")
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
+
+
+@app.get("/api/version", dependencies=[Depends(require_auth)])
+async def get_version():
+    return {"version": __version__}
 
 
 @app.get("/api/summary", dependencies=[Depends(require_auth)])

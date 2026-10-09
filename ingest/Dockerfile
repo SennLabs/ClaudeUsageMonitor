@@ -12,6 +12,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+# From the repo root via additional_contexts in docker-compose.yml; read by
+# app/version.py.
+COPY --from=repo VERSION ./VERSION
 COPY schema.sql .
 
 # DB_PATH points here so usage data survives container recreation when

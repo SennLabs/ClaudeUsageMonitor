@@ -783,6 +783,14 @@ def test_healthz_checks_the_database() -> None:
         assert client.get("/healthz").status_code == 200
 
 
+def test_version_comes_from_the_repo_version_file() -> None:
+    """Both services read the repo-root VERSION file; the API must report it."""
+    expected = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+    with TestClient(main_module.app) as client:
+        assert client.get("/api/version").json() == {"version": expected}
+        assert client.get("/healthz").json()["version"] == expected
+
+
 
 
 def test_cache_efficiency_and_prompts() -> None:

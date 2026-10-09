@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from 'solid-js'
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import type { ProjectTimePoint, UsageTimePoint } from '../api'
 import { fmtY, granularityFor, niceMax, tooltipLabel, xLabel } from '../chart'
 
@@ -20,9 +20,7 @@ const ML = 68
 const MR = 16
 const MT = 16
 const MB = 44
-const W = 800
 const H = 220
-const PW = W - ML - MR
 const PH = H - MT - MB
 
 interface Series {
@@ -46,6 +44,23 @@ export interface UsageChartProps {
 export default function UsageChart(props: UsageChartProps) {
   const [hoveredSeries, setHoveredSeries] = createSignal<number | null>(null)
   const [hoveredBucket, setHoveredBucket] = createSignal<string | null>(null)
+
+  // The plot is drawn at the container's real pixel width rather than scaled
+  // from a fixed 800-wide viewBox. Scaling made a wide monitor render the
+  // chart several hundred pixels tall with oversized axis text.
+  const [width, setWidth] = createSignal(800)
+  const W = () => width()
+  const PW = () => Math.max(W() - ML - MR, 1)
+  let container!: HTMLDivElement
+  onMount(() => {
+    const ro = new ResizeObserver(([entry]) => {
+      const w = Math.round(entry.contentRect.width)
+      if (w > 0) setWidth(w)
+    })
+    ro.observe(container)
+    onCleanup(() => ro.disconnect())
+  })
+  const xAt = (i: number, n: number) => ML + (i / Math.max(n - 1, 1)) * PW()
 
   // Derive normalised series from whichever data prop was given
   const series = createMemo<Series[]>(() => {
@@ -116,7 +131,7 @@ export default function UsageChart(props: UsageChartProps) {
     return series().map((s) => {
       const byBucket = new Map(s.points.map((p) => [p.bucket, p.value]))
       const coords = buckets.map((b, i) => ({
-        x: ML + (i / Math.max(n - 1, 1)) * PW,
+        x: xAt(i, n),
         y: MT + (1 - (byBucket.get(b) ?? 0) / maxVal()) * PH,
         bucket: b,
         value: byBucket.get(b) ?? 0,
@@ -127,7 +142,7 @@ export default function UsageChart(props: UsageChartProps) {
       // a fresh install with an hour of data looked like a day of ramping
       // spend. Draw just the dot instead.
       const area = n > 1
-        ? `${line} L${(ML + PW).toFixed(1)},${(MT + PH).toFixed(1)} L${ML},${(MT + PH).toFixed(1)} Z`
+        ? `${line} L${(ML + PW()).toFixed(1)},${(MT + PH).toFixed(1)} L${ML},${(MT + PH).toFixed(1)} Z`
         : ''
       return { ...s, coords, line, area }
     })
@@ -143,18 +158,54 @@ export default function UsageChart(props: UsageChartProps) {
   const xTicks = createMemo(() => {
     const buckets = allBuckets()
     if (buckets.length === 0) return []
-    const step = Math.max(1, Math.floor(buckets.length / 7))
+    // Roughly one label per 110px so a wide chart gets more of them.
+    const target = Math.max(2, Math.floor(PW() / 110))
+    const step = Math.max(1, Math.ceil(buckets.length / target))
     return buckets
-      .filter((_, i) => i % step === 0 || i === buckets.length - 1)
-      .map((b) => {
-        const idx = allBuckets().indexOf(b)
-        const n = allBuckets().length
-        return {
-          x: ML + (idx / Math.max(n - 1, 1)) * PW,
-          label: xLabel(b, granularity(), multiYear()),
-        }
-      })
+      .map((b, i) => ({ b, i }))
+      // Always label the last bucket, dropping a stepped label that would sit on top of it.
+      .filter(({ i }) => i === buckets.length - 1 || (i % step === 0 && buckets.length - 1 - i >= step / 2))
+      .map(({ b, i }) => ({
+        x: xAt(i, buckets.length),
+        label: xLabel(b, granularity(), multiYear()),
+      }))
   })
+
+  // Hover is resolved from the pointer position in one handler. It used to be
+  // per-bucket hit rects plus per-point circles, but those captured their x
+  // position when first created and <For> reuses them by bucket key, so after
+  // a refresh added a bucket they sat over the wrong part of the plot; the
+  // multi-series circles also overlapped neighbouring columns.
+  function onPointerMove(e: PointerEvent) {
+    const buckets = allBuckets()
+    const n = buckets.length
+    if (n === 0) return
+    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
+    const px = ((e.clientX - rect.left) / rect.width) * W()
+    const py = ((e.clientY - rect.top) / rect.height) * H
+    if (px < ML - 8 || px > ML + PW() + 8 || py < MT - 8 || py > MT + PH + 8) {
+      setHoveredBucket(null)
+      setHoveredSeries(null)
+      return
+    }
+    const idx = n === 1 ? 0 : Math.min(n - 1, Math.max(0, Math.round(((px - ML) / PW()) * (n - 1))))
+    setHoveredBucket(buckets[idx])
+    if (!isMulti()) {
+      setHoveredSeries(null)
+      return
+    }
+    // Nearest line vertically at that bucket.
+    let best = 0
+    let bestDist = Infinity
+    seriesPaths().forEach((sp, si) => {
+      const d = Math.abs(sp.coords[idx].y - py)
+      if (d < bestDist) {
+        bestDist = d
+        best = si
+      }
+    })
+    setHoveredSeries(best)
+  }
 
   // Hover tooltip
   const hoveredInfo = createMemo(() => {
@@ -179,6 +230,7 @@ export default function UsageChart(props: UsageChartProps) {
 
   return (
     <div
+      ref={container}
       classList={{
         'rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900':
           !props.bare,
@@ -229,15 +281,19 @@ export default function UsageChart(props: UsageChartProps) {
         }
       >
         <svg
-          viewBox={`0 0 ${W} ${H}`}
-          class="w-full"
+          viewBox={`0 0 ${W()} ${H}`}
+          width="100%"
+          height={H}
+          class="block touch-none"
+          onPointerMove={onPointerMove}
+          onPointerDown={onPointerMove}
           onPointerLeave={() => { setHoveredBucket(null); setHoveredSeries(null) }}
         >
           {/* Y grid + labels */}
           <For each={yTicks()}>
             {(tick) => (
               <>
-                <line x1={ML} x2={ML + PW} y1={tick.y} y2={tick.y}
+                <line x1={ML} x2={ML + PW()} y1={tick.y} y2={tick.y}
                   stroke="currentColor" stroke-opacity="0.08" />
                 <text x={ML - 6} y={tick.y + 4} text-anchor="end"
                   fill="currentColor" fill-opacity="0.4" font-size="9">
@@ -287,47 +343,17 @@ export default function UsageChart(props: UsageChartProps) {
           {/* Crosshair line */}
           <Show when={hoveredBucket()}>
             {(b) => {
-              const idx = allBuckets().indexOf(b())
-              const x = ML + (idx / Math.max(allBuckets().length - 1, 1)) * PW
+              // Accessor, not a captured value: a non-keyed <Show> runs this
+              // callback once, so a computed x froze the crosshair in place.
+              const x = () => xAt(allBuckets().indexOf(b()), allBuckets().length)
               return (
-                <line x1={x} x2={x} y1={MT} y2={MT + PH}
+                <line x1={x()} x2={x()} y1={MT} y2={MT + PH}
                   stroke="currentColor" stroke-opacity="0.2"
                   stroke-width="1" stroke-dasharray="3 3" />
               )
             }}
           </Show>
 
-          {/* Invisible hit rects per bucket column */}
-          <For each={allBuckets()}>
-            {(b, bi) => {
-              const n = allBuckets().length
-              const x = ML + (bi() / Math.max(n - 1, 1)) * PW
-              const colW = PW / Math.max(n - 1, 1)
-              return (
-                <rect x={x - colW / 2} y={MT} width={colW} height={PH}
-                  fill="transparent"
-                  onPointerEnter={() => { setHoveredBucket(b); setHoveredSeries(null) }} />
-              )
-            }}
-          </For>
-
-          {/* Per-series hit rects (only in multi mode, to identify which line) */}
-          {/* Invisible per-series targets, so the tooltip names the right line.
-              These used to be gated on showDots(), so above 60 buckets every
-              hover fell through to series 0 and the tooltip confidently
-              labelled it with the highest-spending project. */}
-          <Show when={isMulti()}>
-            <For each={seriesPaths()}>
-              {(sp, si) => (
-                <For each={sp.coords}>
-                  {(c) => (
-                    <circle cx={c.x} cy={c.y} r={8} fill="transparent"
-                      onPointerEnter={() => { setHoveredBucket(c.bucket); setHoveredSeries(si()) }} />
-                  )}
-                </For>
-              )}
-            </For>
-          </Show>
         </svg>
       </Show>
     </div>
